@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
+import '../data/backend_features.dart';
 import '../data/responder_service.dart';
 import '../models/responder_models.dart';
 import 'announcements_screen.dart';
@@ -69,12 +70,13 @@ class DashboardScreen extends StatelessWidget {
                       value: needHelp.toString(),
                       color: RapidAlertColors.warning,
                     ),
-                    _summaryCard(
-                      context,
-                      title: 'Active Centers',
-                      value: activeCenters.toString(),
-                      color: RapidAlertColors.success,
-                    ),
+                    if (BackendFeatures.evacuationRecords)
+                      _summaryCard(
+                        context,
+                        title: 'Active Centers',
+                        value: activeCenters.toString(),
+                        color: RapidAlertColors.success,
+                      ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -90,55 +92,62 @@ class DashboardScreen extends StatelessWidget {
                           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                         ),
                       ),
-                      _ModuleRow(
-                        'Track Assigned Reports',
-                        Icons.assignment_rounded,
-                        onTap: () => onNavigateToTab(1),
-                      ),
-                      _ModuleRow(
-                        'Map Responder to Reporter',
-                        Icons.map_rounded,
-                        onTap: () => onNavigateToTab(2),
-                      ),
-                      _ModuleRow(
-                        'Responder Chat to Reporter',
-                        Icons.chat_rounded,
-                        onTap: () => onNavigateToTab(3),
-                      ),
-                      _ModuleRow(
-                        'Real-Time Coordination',
-                        Icons.podcasts_rounded,
-                        onTap: () => onNavigateToTab(4),
-                      ),
-                      _ModuleRow(
-                        'Follow-Up Board',
-                        Icons.event_note_rounded,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => FollowUpBoardScreen(service: service)),
+                      // Modules whose endpoints aren't in production yet stay
+                      // hidden until their BackendFeatures flag is turned on.
+                      ..._withDividers([
+                        _ModuleRow(
+                          'Track Assigned Reports',
+                          Icons.assignment_rounded,
+                          onTap: () => onNavigateToTab(1),
                         ),
-                      ),
-                      _ModuleRow(
-                        'Evacuation Tracker',
-                        Icons.home_work_rounded,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => EvacuationTrackerScreen(service: service)),
+                        _ModuleRow(
+                          'Map Responder to Reporter',
+                          Icons.map_rounded,
+                          onTap: () => onNavigateToTab(2),
                         ),
-                      ),
-                      _ModuleRow(
-                        'Announcements',
-                        Icons.campaign_rounded,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => AnnouncementsScreen(service: service)),
+                        _ModuleRow(
+                          'Responder Chat to Reporter',
+                          Icons.chat_rounded,
+                          onTap: () => onNavigateToTab(3),
                         ),
-                      ),
-                      _ModuleRow(
-                        'Resources',
-                        Icons.inventory_2_rounded,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => ResourcesScreen(service: service)),
+                        _ModuleRow(
+                          'Real-Time Coordination',
+                          Icons.podcasts_rounded,
+                          onTap: () => onNavigateToTab(4),
                         ),
-                        isLast: true,
-                      ),
+                        if (BackendFeatures.followUps)
+                          _ModuleRow(
+                            'Follow-Up Board',
+                            Icons.event_note_rounded,
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => FollowUpBoardScreen(service: service)),
+                            ),
+                          ),
+                        if (BackendFeatures.evacuationRecords)
+                          _ModuleRow(
+                            'Evacuation Tracker',
+                            Icons.home_work_rounded,
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => EvacuationTrackerScreen(service: service)),
+                            ),
+                          ),
+                        if (BackendFeatures.responderAnnouncements)
+                          _ModuleRow(
+                            'Announcements',
+                            Icons.campaign_rounded,
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => AnnouncementsScreen(service: service)),
+                            ),
+                          ),
+                        if (BackendFeatures.resources)
+                          _ModuleRow(
+                            'Resources',
+                            Icons.inventory_2_rounded,
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => ResourcesScreen(service: service)),
+                            ),
+                          ),
+                      ]),
                     ],
                   ),
                 ),
@@ -148,6 +157,14 @@ class DashboardScreen extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Draws a divider under every module row except the last one shown.
+  List<Widget> _withDividers(List<_ModuleRow> rows) {
+    return [
+      for (var i = 0; i < rows.length; i++)
+        i == rows.length - 1 ? rows[i].asLast() : rows[i],
+    ];
   }
 
   Widget _summaryCard(
@@ -197,6 +214,8 @@ class _ModuleRow extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   final bool isLast;
+
+  _ModuleRow asLast() => _ModuleRow(text, icon, onTap: onTap, isLast: true);
 
   @override
   Widget build(BuildContext context) {

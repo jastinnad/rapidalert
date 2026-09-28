@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../app/theme.dart';
+import '../data/backend_features.dart';
 import '../data/responder_service.dart';
 import '../models/responder_models.dart';
 import 'ui_components.dart';
@@ -13,6 +14,10 @@ class CoordinationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!BackendFeatures.coordinationFeed) {
+      return _unavailable();
+    }
+
     return StreamBuilder<List<CoordinationEvent>>(
       stream: service.eventsStream,
       builder: (context, snapshot) {
@@ -93,6 +98,46 @@ class CoordinationScreen extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  /// Shown while production has no coordination-events endpoint, instead of
+  /// a "connected" banner over a feed that can never receive anything.
+  Widget _unavailable() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+      children: const [
+        ScreenHeader(
+          title: 'Real-Time Coordination',
+          subtitle: 'Live operations stream for responder and admin coordination.',
+        ),
+        SizedBox(height: 12),
+        GlassCard(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline_rounded, color: RapidAlertColors.operationsBlue),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Live coordination is not available yet',
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'Your assigned reports and their status changes are in the Reports tab, '
+                      'and messages from reporters are in the Chat tab.',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/responder_models.dart';
+import 'backend_features.dart';
 import 'responder_service.dart';
 
 class ApiResponderService implements ResponderService {
@@ -303,6 +304,9 @@ class ApiResponderService implements ResponderService {
     _announcementsController.add(const <Announcement>[]);
     _resourcesController.add(const <ResourceRequestEntry>[]);
 
+    // Each _refresh* below for an endpoint that production doesn't have yet
+    // returns without a request (see BackendFeatures), and its poll timer is
+    // only started once the endpoint exists.
     await _refreshReports();
     await _refreshEvents();
     await _refreshFollowUps();
@@ -326,21 +330,29 @@ class ApiResponderService implements ResponderService {
       _refreshActiveTracking();
     });
 
-    _followUpsPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      _refreshFollowUps();
-    });
+    if (BackendFeatures.followUps) {
+      _followUpsPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+        _refreshFollowUps();
+      });
+    }
 
-    _evacuationPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      _refreshEvacuationRecords();
-    });
+    if (BackendFeatures.evacuationRecords) {
+      _evacuationPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+        _refreshEvacuationRecords();
+      });
+    }
 
-    _announcementsPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
-      _refreshAnnouncements();
-    });
+    if (BackendFeatures.responderAnnouncements) {
+      _announcementsPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        _refreshAnnouncements();
+      });
+    }
 
-    _resourcesPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      _refreshResourceRequests();
-    });
+    if (BackendFeatures.resources) {
+      _resourcesPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+        _refreshResourceRequests();
+      });
+    }
   }
 
   Future<void> _refreshReports() async {
@@ -368,6 +380,7 @@ class ApiResponderService implements ResponderService {
   }
 
   Future<void> _refreshEvents() async {
+    if (!BackendFeatures.coordinationFeed) return;
     final endpoint = Uri.parse('$_baseUrl/api/responder/coordination/events');
     final response = await http.get(endpoint, headers: _headers);
 
@@ -412,6 +425,7 @@ class ApiResponderService implements ResponderService {
   }
 
   Future<void> _refreshFollowUps() async {
+    if (!BackendFeatures.followUps) return;
     final endpoint = Uri.parse('$_baseUrl/api/responder/follow-ups/upcoming');
     final response = await http.get(endpoint, headers: _headers);
 
@@ -432,6 +446,7 @@ class ApiResponderService implements ResponderService {
   }
 
   Future<void> _refreshEvacuationRecords() async {
+    if (!BackendFeatures.evacuationRecords) return;
     final endpoint = Uri.parse('$_baseUrl/api/responder/evacuation-records');
     final response = await http.get(endpoint, headers: _headers);
 
@@ -452,6 +467,7 @@ class ApiResponderService implements ResponderService {
   }
 
   Future<void> _refreshAnnouncements() async {
+    if (!BackendFeatures.responderAnnouncements) return;
     final endpoint = Uri.parse('$_baseUrl/api/responder/announcements');
     final response = await http.get(endpoint, headers: _headers);
 
@@ -472,6 +488,7 @@ class ApiResponderService implements ResponderService {
   }
 
   Future<void> _refreshResourceRequests() async {
+    if (!BackendFeatures.resources) return;
     final endpoint = Uri.parse('$_baseUrl/api/responder/resources');
     final response = await http.get(endpoint, headers: _headers);
 

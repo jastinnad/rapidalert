@@ -20,6 +20,8 @@ import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
 
+import 'backend_features.dart';
+
 /// Must be a top-level (or static) function — FCM invokes this in a
 /// separate isolate when a data message arrives while the app is
 /// backgrounded or terminated.
@@ -40,6 +42,10 @@ class PushNotificationService {
     required String baseUrl,
     required String bearerToken,
   }) async {
+    // Until /api/device-token is deployed there is nowhere to register the
+    // token, so don't ask for notification permission or call the backend.
+    if (!BackendFeatures.pushRegistration) return;
+
     final messaging = FirebaseMessaging.instance;
 
     await messaging.requestPermission(alert: true, badge: true, sound: true);
@@ -66,6 +72,8 @@ class PushNotificationService {
     required String baseUrl,
     required String bearerToken,
   }) async {
+    if (!BackendFeatures.pushRegistration) return;
+
     final token = await FirebaseMessaging.instance.getToken();
     if (token == null) {
       return;
