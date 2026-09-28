@@ -8,6 +8,7 @@ import 'home_shell.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
 import 'reporter_home_shell.dart';
+import 'ui_components.dart';
 
 enum _AuthView { login, register, guest }
 
@@ -94,29 +95,43 @@ class _AuthGateState extends State<AuthGate> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
-        backgroundColor: RapidAlertColors.emergencyRed,
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.white),
+        body: AuthBackground(
+          child: Center(
+            child: CircularProgressIndicator(color: RapidAlertColors.emergencyRed),
+          ),
         ),
       );
     }
 
     if (AppConfig.useApi && _session == null) {
+      void backToLogin() => setState(() => _authView = _AuthView.login);
+
+      // Register and guest mode replace the login view in place rather than
+      // being pushed routes, so the Android back gesture has to be routed
+      // back to login explicitly instead of closing the app.
+      Widget returnsToLogin(Widget child) => PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) backToLogin();
+        },
+        child: child,
+      );
+
       if (_authView == _AuthView.register) {
-        return RegisterScreen(
-          onRegistered: (session) {
-            setState(() => _session = session);
-            _registerPushToken(session);
-          },
-          onBackToLogin: () => setState(() => _authView = _AuthView.login),
+        return returnsToLogin(
+          RegisterScreen(
+            onRegistered: (session) {
+              setState(() => _session = session);
+              _registerPushToken(session);
+            },
+            onBackToLogin: backToLogin,
+          ),
         );
       }
 
       if (_authView == _AuthView.guest) {
-        return ReporterHomeShell(
-          session: null,
-          isGuest: true,
-          onLogout: () => setState(() => _authView = _AuthView.login),
+        return returnsToLogin(
+          ReporterHomeShell(session: null, isGuest: true, onLogout: backToLogin),
         );
       }
 

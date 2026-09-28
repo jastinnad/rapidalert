@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../app/theme.dart';
 import '../data/auth_service.dart';
+import 'auth_components.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key, required this.onRegistered, this.onBackToLogin});
@@ -82,173 +82,75 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: RapidAlertColors.darkText),
-        title: const Text(
-          'Create Reporter Account',
-          style: TextStyle(color: RapidAlertColors.darkText, fontWeight: FontWeight.w700, fontSize: 17),
+    void refresh(String _) => setState(() {});
+
+    // Same fields, order, labels and placeholders as the website's register
+    // form (resources/views/reporter/register.blade.php).
+    return AuthPage(
+      tagline: 'Community-first hazard preparedness system',
+      title: 'Create Account',
+      subtitle: 'Set up your Rapid Alert access profile',
+      children: [
+        if (_error != null) AuthErrorBanner(message: _error!),
+        AuthField(label: 'First Name', glyph: 'U', hint: 'Enter first name', controller: _firstNameController, onChanged: refresh),
+        AuthField(label: 'Last Name', glyph: 'U', hint: 'Enter last name', controller: _lastNameController, onChanged: refresh),
+        AuthField(
+          label: 'Email',
+          glyph: '@',
+          hint: 'Enter email',
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          onChanged: refresh,
         ),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        AuthField(
+          label: 'Phone Number',
+          glyph: '#',
+          hint: '09XXXXXXXXX',
+          controller: _phoneController,
+          keyboardType: TextInputType.phone,
+          onChanged: refresh,
+        ),
+        AuthField(label: 'House No.', glyph: 'H', hint: 'House number', controller: _houseNoController, onChanged: refresh),
+        AuthField(label: 'Purok', glyph: 'P', hint: 'Purok', controller: _purokController, onChanged: refresh),
+        AuthField(
+          label: 'Barangay',
+          glyph: 'B',
+          hint: 'Enter barangay',
+          helper: 'Lipa City only.',
+          controller: _barangayController,
+          onChanged: refresh,
+        ),
+        AuthField(
+          label: 'Landmark (Optional)',
+          glyph: 'L',
+          hint: 'Nearby landmark',
+          controller: _landmarkController,
+          onChanged: refresh,
+        ),
+        AuthField(
+          label: 'Password',
+          glyph: 'L',
+          hint: 'Create password',
+          helper: 'At least 8 characters.',
+          controller: _passwordController,
+          obscureText: _obscurePassword,
+          onChanged: refresh,
+          suffixIcon: PasswordVisibilityToggle(
+            obscured: _obscurePassword,
+            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+          ),
+        ),
+        AuthPrimaryButton(
+          label: 'Create Account',
+          busy: _submitting,
+          onPressed: _canSubmit ? _submit : null,
+        ),
+        if (widget.onBackToLogin != null)
+          AuthFooter(
             children: [
-              const Text(
-                'Register to report hazards and track their status. '
-                'Responder accounts are provisioned by an administrator.',
-                style: TextStyle(fontSize: 13, color: RapidAlertColors.lightText, height: 1.4),
-              ),
-              const SizedBox(height: 20),
-              if (_error != null) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF5F5),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFFFEE2E2)),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: const TextStyle(color: Color(0xFFB91C1C), fontWeight: FontWeight.w600, fontSize: 13),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-              Row(
-                children: [
-                  Expanded(child: _field('First name', _firstNameController)),
-                  const SizedBox(width: 12),
-                  Expanded(child: _field('Last name', _lastNameController)),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _field('Email', _emailController, keyboardType: TextInputType.emailAddress),
-              const SizedBox(height: 14),
-              _field(
-                'Phone (11 digits)',
-                _phoneController,
-                keyboardType: TextInputType.phone,
-                hint: '09XXXXXXXXX',
-              ),
-              const SizedBox(height: 14),
-              _field(
-                'Password (min. 8 characters)',
-                _passwordController,
-                obscure: _obscurePassword,
-                suffixIcon: IconButton(
-                  icon: Icon(_obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded, size: 20),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Address (Lipa City pilot area)',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: RapidAlertColors.darkText),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(child: _field('House / block no.', _houseNoController)),
-                  const SizedBox(width: 12),
-                  Expanded(child: _field('Purok', _purokController)),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _field('Barangay', _barangayController),
-              const SizedBox(height: 14),
-              _field('Landmark (optional)', _landmarkController),
-              const SizedBox(height: 28),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: Material(
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(11),
-                  child: Ink(
-                    decoration: BoxDecoration(gradient: authGradient, borderRadius: BorderRadius.circular(11)),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(11),
-                      onTap: _canSubmit ? _submit : null,
-                      child: Opacity(
-                        opacity: _canSubmit ? 1 : 0.5,
-                        child: Center(
-                          child: _submitting
-                              ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                                )
-                              : const Text(
-                                  'Create Account',
-                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
-                                ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (widget.onBackToLogin != null) ...[
-                const SizedBox(height: 12),
-                Center(
-                  child: TextButton(
-                    onPressed: widget.onBackToLogin,
-                    child: const Text('Already have an account? Sign in'),
-                  ),
-                ),
-              ],
+              AuthFooterLink(lead: 'Already have an account?', label: 'Login Here', onTap: widget.onBackToLogin!),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _field(
-    String label,
-    TextEditingController controller, {
-    TextInputType? keyboardType,
-    bool obscure = false,
-    Widget? suffixIcon,
-    String? hint,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF334155))),
-        const SizedBox(height: 6),
-        TextField(
-          controller: controller,
-          keyboardType: keyboardType,
-          obscureText: obscure,
-          onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(
-            hintText: hint,
-            filled: true,
-            fillColor: Colors.white,
-            suffixIcon: suffixIcon,
-            contentPadding: const EdgeInsets.symmetric(vertical: 13, horizontal: 14),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
-              borderSide: const BorderSide(color: RapidAlertColors.border, width: 2),
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
-              borderSide: const BorderSide(color: RapidAlertColors.border, width: 2),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
-              borderSide: const BorderSide(color: Color(0xFFF87171), width: 2),
-            ),
-          ),
-        ),
       ],
     );
   }

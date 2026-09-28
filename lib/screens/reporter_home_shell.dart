@@ -7,6 +7,7 @@ import '../data/auth_service.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
 import 'evacuation_centers_screen.dart';
+import 'preparedness_assistant_sheet.dart';
 import 'report_submit_screen.dart';
 import 'report_tracking_screen.dart';
 import 'settings_screen.dart';
@@ -38,6 +39,7 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
     _service = ApiReporterService(
       baseUrl: AppConfig.apiBaseUrl,
       bearerToken: session?.token ?? '',
+      myUserId: session?.responderUserId,
     );
   }
 
@@ -61,6 +63,9 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
           ];
 
     return Scaffold(
+      // Same place as the website's preparedness widget toggle, which sits on
+      // every reporter page (guest or signed in) — see chatbot/popup.blade.php.
+      floatingActionButton: const _PreparednessButton(),
       body: AtmosphericBackground(
         child: SafeArea(
           child: Stack(
@@ -128,6 +133,41 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
   }
 }
 
+/// The website's chatbot toggle: a 56px white circle showing the logo
+/// (chatbot.css .ra-chatbot-toggle).
+class _PreparednessButton extends StatelessWidget {
+  const _PreparednessButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Preparedness assistant',
+      child: Material(
+        color: Colors.white,
+        elevation: 0,
+        shape: const CircleBorder(side: BorderSide(color: RapidAlertColors.border)),
+        shadowColor: Colors.transparent,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => showPreparednessAssistant(context),
+          child: Container(
+            width: 56,
+            height: 56,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: Color(0x1F0F172A), blurRadius: 20, offset: Offset(0, 8))],
+            ),
+            child: ClipOval(
+              child: Image.asset('assets/images/rapid_alert_logo.png', width: 44, height: 44, fit: BoxFit.cover),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ReporterDashboardTab extends StatefulWidget {
   const _ReporterDashboardTab({required this.service, required this.session, required this.onNavigateToTab});
 
@@ -142,6 +182,27 @@ class _ReporterDashboardTab extends StatefulWidget {
 class _ReporterDashboardTabState extends State<_ReporterDashboardTab> {
   CheckInStatus _status = CheckInStatus.safe;
   bool _updatingStatus = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  /// This tab's state is destroyed and rebuilt every time the shell
+  /// switches away and back (AnimatedSwitcher, not IndexedStack), so
+  /// without this the status would silently reset to "safe" on every
+  /// return to Home regardless of what's actually persisted server-side.
+  Future<void> _loadStatus() async {
+    try {
+      final status = await widget.service.loadCheckInStatus();
+      if (!mounted) return;
+      setState(() => _status = status);
+    } catch (_) {
+      // Keep the "safe" default on failure — best-effort, not worth
+      // blocking the dashboard over.
+    }
+  }
 
   Future<void> _setStatus(CheckInStatus status) async {
     setState(() => _updatingStatus = true);

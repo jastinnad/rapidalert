@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app/theme.dart';
+import '../data/osrm_route.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
 import 'ui_components.dart';
@@ -52,6 +53,15 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
 
   final _mapController = MapController();
   bool _mapReady = false;
+
+  // Real road-following route to the selected (or best-ranked) center,
+  // fetched from the same OSRM routing backend the website's evacuation
+  // finder uses — falls back to a straight dashed line while loading or if
+  // the routing request fails, matching the website's own fallback.
+  List<LatLng>? _routePoints;
+  int? _routedAreaId;
+  LatLng? _routedFrom;
+  int _routeRequestId = 0;
 
   @override
   void didUpdateWidget(covariant EvacuationCentersScreen oldWidget) {
@@ -223,32 +233,116 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     }
   }
 
+  void _maybeFetchRoute(EvacuationCenter target) {
+    final movedFar = _routedFrom != null &&
+        const Distance().distance(_routedFrom!, _position) > 100;
+    if (_routedAreaId == target.areaId && !movedFar) return;
+
+    // Clear the stale route immediately (in this same build) so a switch to
+    // a new center never shows the previous center's route mislabeled as
+    // current — the fallback straight line takes over until this resolves.
+    final requestId = ++_routeRequestId;
+    _routedAreaId = target.areaId;
+    _routedFrom = _position;
+    _routePoints = null;
+    fetchRoadRoute(_position, LatLng(target.lat, target.lon)).then((points) {
+      // Ignore a response from a request a newer selection has superseded.
+      if (!mounted || requestId != _routeRequestId) return;
+      setState(() => _routePoints = points);
+    });
+  }
+
+  int? _lastFitAreaId;
+  bool _lastFitHadRoute = false;
+
+  /// Reframes the map to the current route's full extent once per selection
+  /// — and again once a fallback straight line upgrades to the real route —
+  /// so switching centers doesn't leave the view zoomed into a shared local
+  /// road segment that looks identical regardless of which center is picked.
+  void _fitRouteOnce(EvacuationCenter target, List<LatLng>? roadRoute) {
+    final hasRoute = roadRoute != null;
+    if (_lastFitAreaId == target.areaId && _lastFitHadRoute == hasRoute) return;
+    _lastFitAreaId = target.areaId;
+    _lastFitHadRoute = hasRoute;
+
+    final points = roadRoute ?? [_position, LatLng(target.lat, target.lon)];
+    void fit() {
+      if (!mounted) return;
+      _mapController.fitCamera(
+        CameraFit.coordinates(coordinates: points, padding: const EdgeInsets.all(32)),
+      );
+    }
+
+    // flutter_map measures itself (emitting the *initial* camera) only after
+    // its first frame; a fit before that leaves the tile layer loading the
+    // stale view and the map grey until panned. Wait for the size event.
+    if (_mapSized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => fit());
+    } else {
+      _pendingFit = fit;
+    }
+  }
+
+  bool _mapSized = false;
+  VoidCallback? _pendingFit;
+
+  void _onMapEvent(MapEvent event) {
+    if (_mapSized || event is! MapEventNonRotatedSizeChange) return;
+    _mapSized = true;
+    final fit = _pendingFit;
+    _pendingFit = null;
+    if (fit != null) WidgetsBinding.instance.addPostFrameCallback((_) => fit());
+  }
+
   @override
   Widget build(BuildContext context) {
+    final showingMap = !(_loadingPosition || _loadingCenters) && _loadError == null;
+    if (!showingMap) {
+      // The map is removed while loading, so the next one must be measured
+      // again before a fit.
+      _mapSized = false;
+      _mapReady = false;
+    }
+
     return Scaffold(
+      // A tab inside ReporterHomeShell, which paints the photo background.
+      backgroundColor: Colors.transparent,
       appBar: AppBar(title: const Text('Nearest Evacuation Centers')),
-      body: AtmosphericBackground(
-        child: _loadingPosition || _loadingCenters
-            ? const Center(child: CircularProgressIndicator())
-            : _loadError != null
-            ? Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_loadError!),
-                    const SizedBox(height: 12),
-                    ElevatedButton(onPressed: _loadCenters, child: const Text('Retry')),
-                  ],
-                ),
-              )
-            : _buildContent(),
-      ),
+      body: _loadingPosition || _loadingCenters
+          ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_loadError!),
+                  const SizedBox(height: 12),
+                  ElevatedButton(onPressed: _loadCenters, child: const Text('Retry')),
+                ],
+              ),
+            )
+          : _buildContent(),
     );
   }
 
   Widget _buildContent() {
     final result = _result;
     final centres = result?.centres ?? const [];
+
+    // Default to the top-ranked (nearest/best) center, matching the
+    // website's self-rescue panel, until the reporter picks a different one
+    // via "Get Directions".
+    final routeTarget = centres.isEmpty
+        ? null
+        : centres.firstWhere((c) => c.areaId == _selectedAreaId, orElse: () => centres.first);
+    if (routeTarget != null) {
+      _maybeFetchRoute(routeTarget);
+    }
+    final routeColor = routeTarget != null ? _parseHexColor(routeTarget.statusColor) : RapidAlertColors.dispatchBlue;
+    final roadRoute = routeTarget != null && _routedAreaId == routeTarget.areaId ? _routePoints : null;
+    if (routeTarget != null) {
+      _fitRouteOnce(routeTarget, roadRoute);
+    }
 
     return Column(
       children: [
@@ -267,19 +361,33 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
               initialCenter: _position,
               initialZoom: 13,
               onMapReady: () => _mapReady = true,
+              onMapEvent: _onMapEvent,
             ),
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.rapidalert',
+                userAgentPackageName: 'site.rapidalert.app',
               ),
+              if (routeTarget != null)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: roadRoute ?? [_position, LatLng(routeTarget.lat, routeTarget.lon)],
+                      color: routeColor,
+                      strokeWidth: roadRoute != null ? 4 : 3,
+                      pattern: roadRoute != null
+                          ? const StrokePattern.solid()
+                          : StrokePattern.dashed(segments: const [10, 6]),
+                    ),
+                  ],
+                ),
               MarkerLayer(
                 markers: [
                   Marker(
                     point: _position,
                     width: 24,
                     height: 24,
-                    child: const Icon(Icons.my_location_rounded, color: RapidAlertColors.operationsBlue),
+                    child: const Icon(Icons.my_location_rounded, color: RapidAlertColors.dispatchBlue),
                   ),
                   ...centres.map(
                     (c) => Marker(
@@ -316,7 +424,9 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
                   )
                 : ListView.separated(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
+                    // Extra bottom space so the preparedness button never
+                    // covers the last center's Get Directions button.
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                     itemCount: centres.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (context, index) => _centerCard(centres[index]),

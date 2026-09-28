@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
 
-/// Plain background — no decorative blur or gradient orbs, kept flat and
-/// consistent with the rest of the app.
+const _backgroundPhoto = AssetImage('assets/images/lipa_background.webp');
+
+/// The website's in-app page background (public/css/home.css .reporter-v5):
+/// the Lipa photo under a 62% white wash, with faint red and blue glows.
 class AtmosphericBackground extends StatelessWidget {
   const AtmosphericBackground({super.key, required this.child});
 
@@ -11,9 +13,66 @@ class AtmosphericBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: RapidAlertColors.background,
+    return _PhotoBackdrop(
+      wash: const Color(0x9EFFFFFF),
+      glows: const [
+        (Alignment(-0.76, -0.64), Color(0x14EF4444)),
+        (Alignment(0.72, 0.64), Color(0x141E40AF)),
+      ],
       child: child,
+    );
+  }
+}
+
+/// The website's login/register background (public/css/auth.css): the same
+/// photo under a lighter 56% white wash, with red and amber glows.
+class AuthBackground extends StatelessWidget {
+  const AuthBackground({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PhotoBackdrop(
+      wash: const Color(0x8FFFFFFF),
+      glows: const [
+        (Alignment(-0.72, -0.68), Color(0x2BEF4444)),
+        (Alignment(0.72, -0.72), Color(0x21F59E0B)),
+      ],
+      child: child,
+    );
+  }
+}
+
+class _PhotoBackdrop extends StatelessWidget {
+  const _PhotoBackdrop({required this.wash, required this.glows, required this.child});
+
+  final Color wash;
+  final List<(Alignment, Color)> glows;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const ColoredBox(color: RapidAlertColors.background),
+        const Image(image: _backgroundPhoto, fit: BoxFit.cover, gaplessPlayback: true),
+        ColoredBox(color: wash),
+        // CSS radial glows fade out at ~34% of the farthest-corner distance,
+        // which on a phone is roughly two-thirds of the screen width.
+        for (final (center, color) in glows)
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: center,
+                radius: 0.67,
+                colors: [color, color.withValues(alpha: 0)],
+              ),
+            ),
+          ),
+        child,
+      ],
     );
   }
 }
