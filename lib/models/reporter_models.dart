@@ -122,6 +122,11 @@ class TrackedReport {
     required this.createdAt,
     required this.updatedAt,
     required this.adminComment,
+    this.responderLat,
+    this.responderLng,
+    this.responderLocationUpdatedAt,
+    this.etaMinutes,
+    this.assignedResponderUserId,
   });
 
   final int id;
@@ -135,6 +140,18 @@ class TrackedReport {
   final DateTime updatedAt;
   final String adminComment;
 
+  /// Present whenever a responder is assigned, regardless of status — used
+  /// to know who to message (unlike [responderLat], not gated to
+  /// en_route/on_scene).
+  final int? assignedResponderUserId;
+
+  /// Only ever non-null while [status] is `en_route`/`on_scene` — the
+  /// backend strips these fields the instant a report leaves that window.
+  final double? responderLat;
+  final double? responderLng;
+  final DateTime? responderLocationUpdatedAt;
+  final int? etaMinutes;
+
   factory TrackedReport.fromApi(Map<String, dynamic> json) {
     return TrackedReport(
       id: (json['id'] as num?)?.toInt() ?? 0,
@@ -147,6 +164,13 @@ class TrackedReport {
       createdAt: DateTime.fromMillisecondsSinceEpoch((json['createdAt'] as num?)?.toInt() ?? 0),
       updatedAt: DateTime.fromMillisecondsSinceEpoch((json['updatedAt'] as num?)?.toInt() ?? 0),
       adminComment: json['adminComment']?.toString() ?? '',
+      responderLat: (json['responderLat'] as num?)?.toDouble(),
+      responderLng: (json['responderLng'] as num?)?.toDouble(),
+      responderLocationUpdatedAt: json['responderLocationUpdatedAt'] != null
+          ? DateTime.fromMillisecondsSinceEpoch((json['responderLocationUpdatedAt'] as num).toInt())
+          : null,
+      etaMinutes: (json['etaMinutes'] as num?)?.toInt(),
+      assignedResponderUserId: (json['assignedResponderUserId'] as num?)?.toInt(),
     );
   }
 }

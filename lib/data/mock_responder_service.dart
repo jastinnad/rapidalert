@@ -211,6 +211,7 @@ class MockResponderService implements ResponderService {
   @override
   Future<void> sendResponderMessage({
     required String reportId,
+    required int receiverId,
     required String text,
   }) async {
     final message = ChatMessage(
@@ -266,9 +267,7 @@ class MockResponderService implements ResponderService {
         id: 'evt-${DateTime.now().millisecondsSinceEpoch}',
         title: 'Status updated',
         message: 'Report $reportId changed to ${status.name}.',
-        priority: status == ReportStatus.needHelp
-            ? CoordinationPriority.critical
-            : CoordinationPriority.normal,
+        priority: CoordinationPriority.normal,
         time: DateTime.now(),
       ),
     );
@@ -300,7 +299,7 @@ class MockResponderService implements ResponderService {
         hazard: 'Flood',
         location: 'Barangay Banaybanay',
         reporterName: 'A. Mendoza',
-        status: ReportStatus.inProgress,
+        status: ReportStatus.enRoute,
         needHelp: true,
         updated: DateTime.now().subtract(const Duration(minutes: 9)),
         reporterLat: 13.9420,
@@ -322,7 +321,7 @@ class MockResponderService implements ResponderService {
         hazard: 'Medical',
         location: 'Barangay Tambo',
         reporterName: 'J. Cruz',
-        status: ReportStatus.needHelp,
+        status: ReportStatus.assigned,
         needHelp: true,
         updated: DateTime.now().subtract(const Duration(minutes: 3)),
         reporterLat: 13.9387,
@@ -459,7 +458,6 @@ class MockResponderService implements ResponderService {
       _reports[i] = current.copyWith(
         needHelp: toggledNeedHelp,
         updated: DateTime.now(),
-        status: toggledNeedHelp ? ReportStatus.needHelp : current.status,
       );
       _reportsController.add(List.unmodifiable(_reports));
     });

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/responder_models.dart';
@@ -42,14 +42,18 @@ class ApiResponderService implements ResponderService {
 
   Timer? _reportsPollTimer;
   Timer? _eventsPollTimer;
-  Timer? _trackingTimer;
+  Timer? _activeTrackingPollTimer;
   Timer? _followUpsPollTimer;
   Timer? _evacuationPollTimer;
   Timer? _announcementsPollTimer;
   Timer? _resourcesPollTimer;
+  StreamSubscription<Position>? _gpsSub;
+  Timer? _gpsHeartbeat;
+  DateTime? _lastGpsPingAt;
 
   GeoPoint _responderPoint = const GeoPoint(lat: 13.9412, lng: 121.1631);
   String? _activeReportId;
+  List<ActiveTrackingAssignment> _activeTrackingAssignments = const [];
 
   @override
   Stream<List<IncidentReport>> get reportsStream => _reportsController.stream;
@@ -82,7 +86,7 @@ class ApiResponderService implements ResponderService {
       '$_baseUrl/api/responder/reports/$reportId/status',
     );
 
-    final response = await http.put(
+    final response = await http.post(
       endpoint,
       headers: _headers,
       body: jsonEncode({'status': _apiStatus(status)}),
@@ -94,21 +98,25 @@ class ApiResponderService implements ResponderService {
 
     await _refreshReports();
     await _refreshEvents();
+    await _refreshActiveTracking();
   }
 
   @override
   Future<void> sendResponderMessage({
     required String reportId,
+    required int receiverId,
     required String text,
   }) async {
-    final endpoint = Uri.parse(
-      '$_baseUrl/api/responder/reports/$reportId/messages',
-    );
+    final endpoint = Uri.parse('$_baseUrl/api/reports/messages');
 
     final response = await http.post(
       endpoint,
       headers: _headers,
-      body: jsonEncode({'message': text}),
+      body: jsonEncode({
+        'report_id': int.tryParse(reportId) ?? reportId,
+        'receiver_id': receiverId,
+        'message': text,
+      }),
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -268,7 +276,9 @@ class ApiResponderService implements ResponderService {
   void dispose() {
     _reportsPollTimer?.cancel();
     _eventsPollTimer?.cancel();
-    _trackingTimer?.cancel();
+    _activeTrackingPollTimer?.cancel();
+    _gpsHeartbeat?.cancel();
+    _gpsSub?.cancel();
     _followUpsPollTimer?.cancel();
     _evacuationPollTimer?.cancel();
     _announcementsPollTimer?.cancel();
@@ -311,9 +321,9 @@ class ApiResponderService implements ResponderService {
       }
     });
 
-    _trackingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _simulateLocalTracking();
-      _postTrackingToApi();
+    await _refreshActiveTracking();
+    _activeTrackingPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _refreshActiveTracking();
     });
 
     _followUpsPollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -379,8 +389,8 @@ class ApiResponderService implements ResponderService {
 
   Future<void> _refreshMessages(String reportId) async {
     final endpoint = Uri.parse(
-      '$_baseUrl/api/responder/reports/$reportId/messages',
-    );
+      '$_baseUrl/api/reports/messages',
+    ).replace(queryParameters: {'report_id': reportId});
     final response = await http.get(endpoint, headers: _headers);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -481,21 +491,99 @@ class ApiResponderService implements ResponderService {
     _resourcesController.add(List.unmodifiable(_resourceRequests));
   }
 
-  void _simulateLocalTracking() {
-    final random = Random();
-    _responderPoint = GeoPoint(
-      lat: _responderPoint.lat + (random.nextDouble() - 0.5) * 0.00035,
-      lng: _responderPoint.lng + (random.nextDouble() - 0.5) * 0.00035,
-    );
-    _trackingController.add(_responderPoint);
-  }
+  /// Polls which reports (if any) the responder is currently `en_route`/
+  /// `on_scene` for, and starts/stops the real GPS stream accordingly — GPS
+  /// never runs while there's no active assignment to push it to.
+  Future<void> _refreshActiveTracking() async {
+    final endpoint = Uri.parse('$_baseUrl/api/responder/active-tracking');
+    final response = await http.get(endpoint, headers: _headers);
 
-  Future<void> _postTrackingToApi() async {
-    final reportId = _activeReportId;
-    if (reportId == null) {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       return;
     }
 
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final payload = (json['assignments'] as List<dynamic>? ?? const []);
+    final wasEmpty = _activeTrackingAssignments.isEmpty;
+    _activeTrackingAssignments = payload
+        .map((item) => ActiveTrackingAssignment.fromApi(item as Map<String, dynamic>))
+        .toList();
+    final isEmpty = _activeTrackingAssignments.isEmpty;
+
+    if (wasEmpty && !isEmpty) {
+      await _startGpsStream();
+    } else if (!wasEmpty && isEmpty) {
+      await _stopGpsTracking();
+    }
+  }
+
+  Future<void> _stopGpsTracking() async {
+    _gpsHeartbeat?.cancel();
+    _gpsHeartbeat = null;
+    await _gpsSub?.cancel();
+    _gpsSub = null;
+  }
+
+  Future<void> _startGpsStream() async {
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      return;
+    }
+
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      return;
+    }
+
+    _gpsSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 15),
+    ).listen(_onPosition);
+
+    // The stream only fires after 15m of movement, so a responder standing
+    // still at the scene sends nothing and the reporter's card flips to
+    // "Last known position" after 60s. Re-check in with a fresh fix while
+    // stationary. If no fix can be had (GPS lost), nothing is sent and the
+    // card honestly goes stale.
+    _gpsHeartbeat?.cancel();
+    _gpsHeartbeat = Timer.periodic(_gpsHeartbeatInterval, (_) => _gpsCheckIn());
+  }
+
+  // Check every 20s and skip only if a ping went out in the last 15s. Skipping
+  // on the full interval would skip every other tick (each ping lands just
+  // after a tick), leaving ~50s gaps against the reporter's 60s stale mark.
+  static const _gpsHeartbeatInterval = Duration(seconds: 20);
+  static const _gpsRecentPing = Duration(seconds: 15);
+
+  Future<void> _gpsCheckIn() async {
+    final last = _lastGpsPingAt;
+    if (last != null && DateTime.now().difference(last) < _gpsRecentPing) return;
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      if (_gpsSub == null) return; // tracking stopped while waiting for the fix
+      _onPosition(position);
+    } catch (_) {
+      // No fix available — leave it to show as stale.
+    }
+  }
+
+  void _onPosition(Position position) {
+    _lastGpsPingAt = DateTime.now();
+    _responderPoint = GeoPoint(lat: position.latitude, lng: position.longitude);
+    _trackingController.add(_responderPoint);
+
+    for (final assignment in _activeTrackingAssignments) {
+      _postTrackingToApi(assignment.reportId.toString());
+    }
+  }
+
+  Future<void> _postTrackingToApi(String reportId) async {
     final endpoint = Uri.parse(
       '$_baseUrl/api/responder/reports/$reportId/tracking',
     );
@@ -537,6 +625,7 @@ class ApiResponderService implements ResponderService {
       ),
       reporterLat: _toDouble(item['latitude']) ?? 13.9412,
       reporterLng: _toDouble(item['longitude']) ?? 121.1631,
+      reporterUserId: (item['reporterUserId'] as num?)?.toInt(),
     );
   }
 
@@ -572,24 +661,22 @@ class ApiResponderService implements ResponderService {
   }
 
   ReportStatus _statusFromApi(String value) {
-    final normalized = value.toLowerCase().trim();
-    return switch (normalized) {
-      'assigned' || 'pending' => ReportStatus.assigned,
-      'in-progress' || 'in_progress' || 'ongoing' => ReportStatus.inProgress,
-      'need-help' || 'need_help' || 'critical' => ReportStatus.needHelp,
-      'follow-up' || 'follow_up' => ReportStatus.followUp,
-      'completed' || 'resolved' || 'cancelled' => ReportStatus.completed,
+    return switch (value.toLowerCase().trim()) {
+      'en_route' => ReportStatus.enRoute,
+      'on_scene' => ReportStatus.onScene,
+      'resolved' => ReportStatus.resolved,
+      'completed' => ReportStatus.completed,
       _ => ReportStatus.assigned,
     };
   }
 
   String _apiStatus(ReportStatus status) {
     return switch (status) {
-      ReportStatus.assigned => 'pending',
-      ReportStatus.inProgress => 'in_progress',
-      ReportStatus.needHelp => 'critical',
-      ReportStatus.followUp => 'ongoing',
-      ReportStatus.completed => 'resolved',
+      ReportStatus.assigned => 'assigned',
+      ReportStatus.enRoute => 'en_route',
+      ReportStatus.onScene => 'on_scene',
+      ReportStatus.resolved => 'resolved',
+      ReportStatus.completed => 'completed',
     };
   }
 

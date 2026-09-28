@@ -1,4 +1,7 @@
-enum ReportStatus { assigned, inProgress, needHelp, followUp, completed }
+/// Mirrors the backend's real StatusMachine vocabulary exactly
+/// (assigned/en_route/on_scene/resolved/completed). `needHelp` is a
+/// separate `bool` field on [IncidentReport], not a status value.
+enum ReportStatus { assigned, enRoute, onScene, resolved, completed }
 
 enum CoordinationPriority { normal, important, urgent, critical }
 
@@ -13,6 +16,7 @@ class IncidentReport {
     required this.updated,
     required this.reporterLat,
     required this.reporterLng,
+    this.reporterUserId,
   });
 
   final String id;
@@ -24,6 +28,10 @@ class IncidentReport {
   final DateTime updated;
   final double reporterLat;
   final double reporterLng;
+
+  /// Who to message — null until the backend's reports-list endpoint is
+  /// wired up for this project (a separate, pre-existing gap).
+  final int? reporterUserId;
 
   IncidentReport copyWith({
     ReportStatus? status,
@@ -40,6 +48,7 @@ class IncidentReport {
       updated: updated ?? this.updated,
       reporterLat: reporterLat,
       reporterLng: reporterLng,
+      reporterUserId: reporterUserId,
     );
   }
 }
@@ -83,6 +92,28 @@ class GeoPoint {
 
   final double lat;
   final double lng;
+}
+
+/// A report the current responder is actively `en_route`/`on_scene` for —
+/// tells [ApiResponderService] which reports to push GPS pings to.
+class ActiveTrackingAssignment {
+  const ActiveTrackingAssignment({
+    required this.reportId,
+    required this.trackingId,
+    required this.status,
+  });
+
+  final int reportId;
+  final String trackingId;
+  final String status;
+
+  factory ActiveTrackingAssignment.fromApi(Map<String, dynamic> json) {
+    return ActiveTrackingAssignment(
+      reportId: (json['reportId'] as num?)?.toInt() ?? 0,
+      trackingId: json['trackingId']?.toString() ?? '',
+      status: json['status']?.toString() ?? '',
+    );
+  }
 }
 
 enum FollowUpPriority { high, medium, low }

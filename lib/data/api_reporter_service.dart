@@ -3,15 +3,21 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/reporter_models.dart';
+import '../models/responder_models.dart' show ChatMessage;
 import 'reporter_service.dart';
 
 class ApiReporterService implements ReporterService {
-  ApiReporterService({required String baseUrl, required String bearerToken})
+  ApiReporterService({required String baseUrl, required String bearerToken, int? myUserId})
     : _baseUrl = baseUrl,
-      _bearerToken = bearerToken;
+      _bearerToken = bearerToken,
+      _myUserId = myUserId;
 
   final String _baseUrl;
   final String _bearerToken;
+  final int? _myUserId;
+
+  @override
+  int? get currentUserId => _myUserId;
 
   /// Guests (no account) construct this service with an empty token — the
   /// backend's reporting routes accept requests with or without one.
@@ -224,6 +230,21 @@ class ApiReporterService implements ReporterService {
   }
 
   @override
+  Future<CheckInStatus> loadCheckInStatus() async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/api/reporter/user-status'),
+      headers: _headers,
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to load status: ${response.body}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return CheckInStatusApi.fromApi(json['status']?.toString() ?? 'im_safe');
+  }
+
+  @override
   Future<EvacuationRankedResult> loadNearestEvacuationCenters({
     required double lat,
     required double lon,
@@ -264,5 +285,56 @@ class ApiReporterService implements ReporterService {
     }
 
     return GeofenceArrivalResult.fromApi(jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
+  @override
+  Future<List<ChatMessage>> loadReportMessages(int reportId) async {
+    final uri = Uri.parse(
+      '$_baseUrl/api/reports/messages',
+    ).replace(queryParameters: {'report_id': reportId.toString()});
+    final response = await http.get(uri, headers: _headers);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to load messages: ${response.body}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final items = (json['messages'] as List<dynamic>? ?? const []);
+    return items.map((item) => _chatMessageFromApi(item as Map<String, dynamic>)).toList();
+  }
+
+  @override
+  Future<void> sendReportMessage({
+    required int reportId,
+    required int receiverId,
+    required String text,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/reports/messages'),
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'report_id': reportId,
+        'receiver_id': receiverId,
+        'message': text,
+      }),
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to send message: ${response.body}');
+    }
+  }
+
+  ChatMessage _chatMessageFromApi(Map<String, dynamic> json) {
+    final senderId = (json['senderId'] as num?)?.toInt();
+    return ChatMessage(
+      id: json['id']?.toString() ?? '',
+      reportId: json['reportId']?.toString() ?? '',
+      sender: json['senderName']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+      time: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      // Only two parties can ever exist in one of these threads (enforced
+      // server-side) — anything not sent by me was sent by the responder.
+      isResponder: senderId != _myUserId,
+    );
   }
 }

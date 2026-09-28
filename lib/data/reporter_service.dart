@@ -1,6 +1,12 @@
 import '../models/reporter_models.dart';
+import '../models/responder_models.dart' show ChatMessage;
 
 abstract class ReporterService {
+  /// The logged-in reporter's numeric account id, or `null` for a guest
+  /// (no session). Used to tell "my messages" apart from the responder's
+  /// in a chat thread, and to hide chat entirely for guests.
+  int? get currentUserId;
+
   Future<ReportFormOptions> loadHazardOptions();
 
   Future<ReportSubmitResult> submitReport({
@@ -48,6 +54,8 @@ abstract class ReporterService {
 
   Future<CheckInStatus> setCheckInStatus(CheckInStatus status);
 
+  Future<CheckInStatus> loadCheckInStatus();
+
   Future<EvacuationRankedResult> loadNearestEvacuationCenters({
     required double lat,
     required double lon,
@@ -57,5 +65,13 @@ abstract class ReporterService {
   Future<GeofenceArrivalResult> confirmEvacuationArrival({
     required int areaId,
     int? reportId,
+  });
+
+  Future<List<ChatMessage>> loadReportMessages(int reportId);
+
+  Future<void> sendReportMessage({
+    required int reportId,
+    required int receiverId,
+    required String text,
   });
 }

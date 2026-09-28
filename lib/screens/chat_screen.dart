@@ -29,6 +29,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final reports = widget.service.reports;
     _reportId ??= reports.isNotEmpty ? reports.first.id : null;
+    IncidentReport? selectedReport;
+    for (final r in reports) {
+      if (r.id == _reportId) {
+        selectedReport = r;
+        break;
+      }
+    }
 
     return StreamBuilder<List<ChatMessage>>(
       stream: widget.service.chatStream,
@@ -136,11 +143,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       IconButton.filled(
                         onPressed: () {
                           final value = _controller.text.trim();
-                          if (_reportId == null || value.isEmpty) {
+                          final receiverId = selectedReport?.reporterUserId;
+                          if (_reportId == null || value.isEmpty || receiverId == null) {
                             return;
                           }
                           widget.service.sendResponderMessage(
                             reportId: _reportId!,
+                            receiverId: receiverId,
                             text: value,
                           );
                           _controller.clear();

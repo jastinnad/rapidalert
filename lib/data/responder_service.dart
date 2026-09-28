@@ -15,6 +15,7 @@ abstract class ResponderService {
 
   Future<void> sendResponderMessage({
     required String reportId,
+    required int receiverId,
     required String text,
   });
 

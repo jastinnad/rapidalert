@@ -1,25 +1,30 @@
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
   const AppConfig._();
 
-  // Example local Laravel URL from Android emulator: http://10.0.2.2:8000
+  /// Production API. Release builds use it by default so a store build can't
+  /// ship pointing at a dev machine or in mock mode.
+  static const productionApiBaseUrl = 'https://rapid-alert.site';
+
+  // Debug default is the Android emulator's alias for the host machine; pass
+  // --dart-define=RAPID_ALERT_API_BASE_URL=... to point elsewhere.
   static const apiBaseUrl = String.fromEnvironment(
     'RAPID_ALERT_API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: kReleaseMode ? productionApiBaseUrl : 'http://10.0.2.2:8000',
   );
 
   static const useApi = bool.fromEnvironment(
     'RAPID_ALERT_USE_API',
-    defaultValue: false,
+    defaultValue: kReleaseMode,
   );
 
-  static const responderUserId = int.fromEnvironment(
-    'RAPID_ALERT_RESPONDER_USER_ID',
-    defaultValue: 0,
-  );
+  // Dev-only bootstrap session (skips login). Never honoured in release.
+  static const responderUserId = kReleaseMode
+      ? 0
+      : int.fromEnvironment('RAPID_ALERT_RESPONDER_USER_ID', defaultValue: 0);
 
-  // Temporary bootstrap token until login endpoint is wired in backend API.
-  static const bearerToken = String.fromEnvironment(
-    'RAPID_ALERT_TOKEN',
-    defaultValue: '',
-  );
+  static const bearerToken = kReleaseMode
+      ? ''
+      : String.fromEnvironment('RAPID_ALERT_TOKEN', defaultValue: '');
 }

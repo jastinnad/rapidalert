@@ -17,6 +17,21 @@ class AssignedReportsScreen extends StatefulWidget {
 
 class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
   ReportStatus? _filter;
+  String? _updatingReportId;
+
+  Future<void> _advanceStatus(IncidentReport report, ReportStatus nextStatus) async {
+    setState(() => _updatingReportId = report.id);
+    try {
+      await widget.service.updateReportStatus(report.id, nextStatus);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update status. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _updatingReportId = null);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -108,23 +123,24 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: RapidAlertColors.lightText),
                         ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          // needHelp is excluded here: it's driven by the
-                          // report's own needHelp flag (see _statusChip),
-                          // not a status a responder sets directly.
-                          children: ReportStatus.values
-                              .where((status) => status != ReportStatus.needHelp)
-                              .map(
-                                (status) => ActionChip(
-                                  label: Text(_reportStatusLabel(status)),
-                                  onPressed: () => widget.service
-                                      .updateReportStatus(report.id, status),
-                                ),
-                              )
-                              .toList(),
-                        ),
+                        if (_nextStep(report.status) != null) ...[
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              onPressed: _updatingReportId == report.id
+                                  ? null
+                                  : () => _advanceStatus(report, _nextStep(report.status)!.$2),
+                              child: _updatingReportId == report.id
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : Text(_nextStep(report.status)!.$1),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -136,16 +152,19 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
     );
   }
 
+  /// The one forward transition available from a status, matching the
+  /// backend's real StatusMachine — `resolved`/`completed` have none.
+  (String, ReportStatus)? _nextStep(ReportStatus status) {
+    return switch (status) {
+      ReportStatus.assigned => ('Start — En Route', ReportStatus.enRoute),
+      ReportStatus.enRoute => ('Arrived — On Scene', ReportStatus.onScene),
+      ReportStatus.onScene => ('Mark Resolved', ReportStatus.resolved),
+      ReportStatus.resolved || ReportStatus.completed => null,
+    };
+  }
+
   Widget _statusChip(ReportStatus status, bool needHelp) {
-    final color = needHelp
-        ? RapidAlertColors.warning
-        : switch (status) {
-            ReportStatus.assigned => RapidAlertColors.operationsBlue,
-            ReportStatus.inProgress => RapidAlertColors.primaryRed,
-            ReportStatus.needHelp => RapidAlertColors.warning,
-            ReportStatus.followUp => const Color(0xFF7C3AED),
-            ReportStatus.completed => RapidAlertColors.success,
-          };
+    final color = needHelp ? RapidAlertColors.warning : _statusColor(status);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -161,12 +180,22 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
   }
 }
 
+Color _statusColor(ReportStatus status) {
+  return switch (status) {
+    ReportStatus.assigned => RapidAlertColors.statusAssigned,
+    ReportStatus.enRoute => RapidAlertColors.enRoute,
+    ReportStatus.onScene => RapidAlertColors.onSceneAccent,
+    ReportStatus.resolved => RapidAlertColors.statusResolved,
+    ReportStatus.completed => RapidAlertColors.statusCompleted,
+  };
+}
+
 String _reportStatusLabel(ReportStatus status) {
   return switch (status) {
     ReportStatus.assigned => 'Assigned',
-    ReportStatus.inProgress => 'In Progress',
-    ReportStatus.needHelp => 'Need Help',
-    ReportStatus.followUp => 'Follow-up',
+    ReportStatus.enRoute => 'En Route',
+    ReportStatus.onScene => 'On Scene',
+    ReportStatus.resolved => 'Resolved',
     ReportStatus.completed => 'Completed',
   };
 }
