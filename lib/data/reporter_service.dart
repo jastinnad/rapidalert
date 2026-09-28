@@ -38,6 +38,11 @@ abstract class ReporterService {
 
   Future<TrackedReport?> trackReport({String? trackingId, String? clientReportId});
 
+  /// Whether a report of the caller's is already stored under
+  /// [clientReportId]. Read-only. Throws [ReportSubmitException] when the
+  /// answer is unknown (no connection, server error, unexpected reply).
+  Future<bool> submittedReportExists(String clientReportId);
+
   Future<ReporterProfile> loadProfile();
 
   Future<void> updateProfile({

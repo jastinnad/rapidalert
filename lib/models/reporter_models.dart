@@ -358,9 +358,30 @@ class ReportSubmitResult {
     required this.trackingId,
     required this.message,
     required this.duplicate,
+    this.replayed = false,
   });
 
   final String trackingId;
   final String message;
+
+  /// Merged into an already-active incident instead of stored as its own.
   final bool duplicate;
+
+  /// A retry of a report the backend had already stored under the same
+  /// `client_report_id`; [trackingId] is that stored report's.
+  final bool replayed;
+}
+
+/// Why a report submission failed.
+class ReportSubmitException implements Exception {
+  const ReportSubmitException({this.statusCode, this.serverMessage});
+
+  /// Null when the request never got a response (no connection, timeout).
+  final int? statusCode;
+
+  /// The API's own `message`, when it sent one.
+  final String? serverMessage;
+
+  @override
+  String toString() => 'ReportSubmitException($statusCode, $serverMessage)';
 }

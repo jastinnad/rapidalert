@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -15,6 +17,9 @@ class ApiReporterService implements ReporterService {
   final String _baseUrl;
   final String _bearerToken;
   final int? _myUserId;
+
+  /// Generous enough for a photo upload on a weak mobile connection.
+  static const _submitTimeout = Duration(seconds: 90);
 
   @override
   int? get currentUserId => _myUserId;
@@ -131,11 +136,28 @@ class ApiReporterService implements ReporterService {
       request.fields['current_situation[$i]'] = currentSituation[i];
     }
 
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
+    // No response (offline, dropped, timed out) says nothing about whether
+    // the backend stored the report; the caller retries with the same
+    // client_report_id, which the backend treats as the same report.
+    final http.Response response;
+    try {
+      response = await request.send().then(http.Response.fromStream).timeout(_submitTimeout);
+    } on http.ClientException {
+      throw const ReportSubmitException();
+    } on IOException {
+      throw const ReportSubmitException();
+    } on TimeoutException {
+      throw const ReportSubmitException();
+    }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Failed to submit report: ${response.body}');
+      String? serverMessage;
+      try {
+        serverMessage = (jsonDecode(response.body) as Map<String, dynamic>)['message']?.toString();
+      } catch (_) {
+        // Not JSON (e.g. a proxy error page); the status code is enough.
+      }
+      throw ReportSubmitException(statusCode: response.statusCode, serverMessage: serverMessage);
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -143,6 +165,7 @@ class ApiReporterService implements ReporterService {
       trackingId: json['tracking_id']?.toString() ?? '',
       message: json['message']?.toString() ?? 'Report submitted.',
       duplicate: json['duplicate'] == true,
+      replayed: json['replayed'] == true,
     );
   }
 
@@ -167,6 +190,33 @@ class ApiReporterService implements ReporterService {
     }
 
     return TrackedReport.fromApi(json['report'] as Map<String, dynamic>);
+  }
+
+  @override
+  Future<bool> submittedReportExists(String clientReportId) async {
+    // Read-only; answers only {"exists": true|false}. A signed-in reporter
+    // matches only their own reports; a guest matches any guest report with
+    // the ID (guest reports have no server-side ownership binding).
+    final uri = Uri.parse('$_baseUrl/api/reporter/report-submission-status/${Uri.encodeComponent(clientReportId)}');
+    final http.Response response;
+    try {
+      response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 30));
+    } on http.ClientException {
+      throw const ReportSubmitException();
+    } on IOException {
+      throw const ReportSubmitException();
+    } on TimeoutException {
+      throw const ReportSubmitException();
+    }
+
+    Object? exists;
+    try {
+      exists = (jsonDecode(response.body) as Map<String, dynamic>)['exists'];
+    } catch (_) {
+      exists = null;
+    }
+    if (response.statusCode == 200 && exists is bool) return exists;
+    throw ReportSubmitException(statusCode: response.statusCode);
   }
 
   @override

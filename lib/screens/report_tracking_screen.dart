@@ -6,7 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../app/theme.dart';
-import '../data/device_id_service.dart';
+import '../data/report_submission_ids.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
 import 'report_chat_screen.dart';
@@ -15,9 +15,12 @@ import 'ui_components.dart';
 const _liveTrackingStatuses = {'en_route', 'on_scene'};
 
 class ReportTrackingScreen extends StatefulWidget {
-  const ReportTrackingScreen({super.key, required this.service});
+  const ReportTrackingScreen({super.key, required this.service, this.submissionIds});
 
   final ReporterService service;
+
+  /// Where this install's report IDs are kept; defaults to secure storage.
+  final ReportSubmissionIds? submissionIds;
 
   @override
   State<ReportTrackingScreen> createState() => _ReportTrackingScreenState();
@@ -30,6 +33,7 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
   bool _searched = false;
   String? _error;
   Timer? _pollTimer;
+  late final _submissionIds = widget.submissionIds ?? ReportSubmissionIds();
 
   @override
   void initState() {
@@ -58,16 +62,23 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
     }
     try {
       final trackingId = _trackingIdController.text.trim().isEmpty ? null : _trackingIdController.text.trim();
-      // Only scope by this device's own guest ID for the "my latest report"
-      // case (blank field). An explicit tracking ID is meant to be looked
-      // up by anyone who has it, not just the device that submitted it —
-      // sending both made the backend require both to match, so an
-      // explicit tracking-ID search from a different device always failed.
-      final deviceId = trackingId == null ? await DeviceIdService.getOrCreate() : null;
-      final report = await widget.service.trackReport(
-        trackingId: trackingId,
-        clientReportId: deviceId,
-      );
+      // Guests are found by a report's own client_report_id: this install's
+      // latest report for a blank search, or, for a tracking ID this install
+      // submitted, that report's ID. Any other tracking ID is sent alone
+      // (the backend requires both to match when both are sent, so sending
+      // an unrelated ID would hide a report from another device).
+      // Signed-in reporters are matched by their account instead.
+      final isGuest = widget.service.currentUserId == null;
+      final clientReportId = !isGuest
+          ? null
+          : trackingId == null
+          ? await _submissionIds.latestSubmittedId()
+          : await _submissionIds.clientReportIdFor(trackingId);
+      // Without an ID the backend falls back to matching guests by IP, which
+      // on mobile networks can be another phone's report.
+      final report = trackingId == null && clientReportId == null && isGuest
+          ? null
+          : await widget.service.trackReport(trackingId: trackingId, clientReportId: clientReportId);
       if (!mounted) return;
       setState(() => _report = report);
       _syncPollTimer(report);
