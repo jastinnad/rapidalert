@@ -1,4 +1,5 @@
 import '../models/reporter_models.dart';
+import 'offline_cache.dart' show CachedCopy;
 import '../models/responder_models.dart' show ChatMessage;
 
 abstract class ReporterService {
@@ -38,6 +39,14 @@ abstract class ReporterService {
 
   Future<TrackedReport?> trackReport({String? trackingId, String? clientReportId});
 
+  /// The last report [trackReport] found for this account, if it matches
+  /// [trackingId] (any report when null). For display while offline only.
+  Future<CachedCopy<TrackedReport>?> cachedTrackedReport({String? trackingId});
+
+  /// The account's own notifications about one report, newest first.
+  /// Signed-in accounts only; the backend has no read/unread state.
+  Future<List<ReportNotification>> loadReportNotifications(int reportId);
+
   /// Whether a report of the caller's is already stored under
   /// [clientReportId]. Read-only. Throws [ReportSubmitException] when the
   /// answer is unknown (no connection, server error, unexpected reply).
@@ -61,11 +70,19 @@ abstract class ReporterService {
 
   Future<CheckInStatus> loadCheckInStatus();
 
+  /// [fromUserLocation] is false when [lat]/[lon] are a fallback rather than
+  /// the device's real position; the offline copy then keeps no distances
+  /// or ETAs, since they aren't measured from the user.
   Future<EvacuationRankedResult> loadNearestEvacuationCenters({
     required double lat,
     required double lon,
     int groupSize = 1,
+    bool fromUserLocation = true,
   });
+
+  /// The last list [loadNearestEvacuationCenters] returned for this account.
+  /// For display while offline only.
+  Future<CachedCopy<EvacuationRankedResult>?> cachedEvacuationCenters();
 
   Future<GeofenceArrivalResult> confirmEvacuationArrival({
     required int areaId,

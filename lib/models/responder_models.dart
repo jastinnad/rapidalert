@@ -26,8 +26,10 @@ class IncidentReport {
   final ReportStatus status;
   final bool needHelp;
   final DateTime updated;
-  final double reporterLat;
-  final double reporterLng;
+  /// The report's own GPS position; null when the report was submitted
+  /// without one. Never replaced by a default location.
+  final double? reporterLat;
+  final double? reporterLng;
 
   /// Who to message — null until the backend's reports-list endpoint is
   /// wired up for this project (a separate, pre-existing gap).
@@ -88,10 +90,14 @@ class ChatMessage {
 }
 
 class GeoPoint {
-  const GeoPoint({required this.lat, required this.lng});
+  const GeoPoint({required this.lat, required this.lng, this.recordedAt});
 
   final double lat;
   final double lng;
+
+  /// When this position was fixed, if known — lets a screen tell a current
+  /// position from a last known one.
+  final DateTime? recordedAt;
 }
 
 /// A report the current responder is actively `en_route`/`on_scene` for —
@@ -114,6 +120,29 @@ class ActiveTrackingAssignment {
       status: json['status']?.toString() ?? '',
     );
   }
+}
+
+/// A stored backend notification (`/api/reports/notifications`) telling this
+/// responder that [reportId] was assigned to them.
+class AssignmentAlert {
+  const AssignmentAlert({required this.notificationId, required this.reportId, required this.message});
+
+  final int notificationId;
+  final String reportId;
+  final String message;
+}
+
+/// How the last load of the assigned-report list went.
+class ReportListStatus {
+  const ReportListStatus({this.lastLoadedAt, this.errorMessage});
+
+  /// Null until the list has loaded successfully at least once.
+  final DateTime? lastLoadedAt;
+
+  /// Plain-language reason the most recent load failed; null when it worked.
+  final String? errorMessage;
+
+  bool get loaded => lastLoadedAt != null;
 }
 
 enum FollowUpPriority { high, medium, low }

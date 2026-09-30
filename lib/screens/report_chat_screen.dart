@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../app/theme.dart';
 import '../data/reporter_service.dart';
 import '../models/responder_models.dart';
+import 'ui_components.dart';
 
 class ReportChatScreen extends StatefulWidget {
   const ReportChatScreen({
@@ -31,6 +32,10 @@ class _ReportChatScreenState extends State<ReportChatScreen> {
   List<ChatMessage> _messages = const [];
   bool _loading = true;
   bool _sending = false;
+
+  /// The last load failed; shown only while there are no messages, so a
+  /// failed load isn't mistaken for an empty conversation.
+  bool _loadFailed = false;
   Timer? _pollTimer;
 
   @override
@@ -56,11 +61,15 @@ class _ReportChatScreenState extends State<ReportChatScreen> {
       setState(() {
         _messages = messages;
         _loading = false;
+        _loadFailed = false;
       });
       if (grew) _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _loadFailed = true;
+      });
     }
   }
 
@@ -107,6 +116,16 @@ class _ReportChatScreenState extends State<ReportChatScreen> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
+                : _messages.isEmpty && _loadFailed
+                ? Center(
+                    child: ErrorRetry(
+                      message: "Couldn't load messages. Check your connection and try again.",
+                      onRetry: () {
+                        setState(() => _loading = true);
+                        _load();
+                      },
+                    ),
+                  )
                 : _messages.isEmpty
                 ? const Center(child: Text('No messages yet — say hello.'))
                 : ListView.builder(
@@ -167,6 +186,7 @@ class _ReportChatScreenState extends State<ReportChatScreen> {
                   const SizedBox(width: 8),
                   IconButton.filled(
                     onPressed: _sending ? null : _send,
+                    tooltip: 'Send message',
                     style: IconButton.styleFrom(backgroundColor: RapidAlertColors.primaryRed),
                     icon: _sending
                         ? const SizedBox(

@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import 'app_config.dart';
+import 'offline_cache.dart';
 
 class UserSession {
   const UserSession({
@@ -189,6 +190,8 @@ class AuthService {
       _storage.delete(key: _lastNameKey),
       _storage.delete(key: _emailKey),
       _storage.delete(key: _roleKey),
+      // Saved report and evacuation data belongs to the signed-out account.
+      OfflineCache(storage: _storage).clearAll(),
     ]);
   }
 

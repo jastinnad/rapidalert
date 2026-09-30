@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
@@ -6,6 +8,7 @@ import '../data/app_config.dart';
 import '../data/auth_service.dart';
 import '../data/mock_responder_service.dart';
 import '../data/responder_service.dart';
+import '../models/responder_models.dart' show AssignmentAlert;
 import 'assigned_reports_screen.dart';
 import 'chat_screen.dart';
 import 'coordination_screen.dart';
@@ -26,7 +29,13 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   late final ResponderService _service;
+  StreamSubscription<AssignmentAlert>? _alertSub;
   int _index = 0;
+
+  /// The report the Map tab should show, set by an assignment alert's View.
+  String? _mapReportId;
+
+  static const _mapTab = 2;
 
   @override
   void initState() {
@@ -39,12 +48,44 @@ class _HomeShellState extends State<HomeShell> {
             responderUserId: session.responderUserId,
           )
         : MockResponderService();
+    _alertSub = _service.assignmentAlerts.listen(_showAssignmentAlert);
   }
 
   @override
   void dispose() {
+    _alertSub?.cancel();
     _service.dispose();
     super.dispose();
+  }
+
+  /// In-app only (no push): shows while the app is open. Banners queue, so
+  /// two quick assignments are shown one after the other.
+  void _showAssignmentAlert(AssignmentAlert alert) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showMaterialBanner(
+      MaterialBanner(
+        backgroundColor: const Color(0xFFFEF2F2),
+        leading: const Icon(Icons.assignment_ind_rounded, color: RapidAlertColors.primaryRed),
+        content: Semantics(
+          liveRegion: true,
+          child: Text(alert.message, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ),
+        actions: [
+          TextButton(onPressed: messenger.hideCurrentMaterialBanner, child: const Text('Dismiss')),
+          FilledButton(
+            onPressed: () {
+              messenger.hideCurrentMaterialBanner();
+              setState(() {
+                _mapReportId = alert.reportId;
+                _index = _mapTab;
+              });
+            },
+            child: const Text('View'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -55,7 +96,7 @@ class _HomeShellState extends State<HomeShell> {
         onNavigateToTab: (index) => setState(() => _index = index),
       ),
       AssignedReportsScreen(service: _service),
-      MapTrackingScreen(service: _service),
+      MapTrackingScreen(service: _service, initialReportId: _mapReportId),
       ChatScreen(service: _service),
       CoordinationScreen(service: _service),
     ];
@@ -100,7 +141,11 @@ class _HomeShellState extends State<HomeShell> {
           top: false,
           child: BottomNavigationBar(
             currentIndex: _index,
-            onTap: (value) => setState(() => _index = value),
+            // A normal tab switch opens the map on its default report again.
+            onTap: (value) => setState(() {
+              _index = value;
+              _mapReportId = null;
+            }),
             backgroundColor: Colors.white,
             selectedItemColor: RapidAlertColors.primaryRed,
             unselectedItemColor: RapidAlertColors.lightText,

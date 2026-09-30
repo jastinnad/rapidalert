@@ -6,20 +6,30 @@ import 'package:http/http.dart' as http;
 
 import '../models/reporter_models.dart';
 import '../models/responder_models.dart' show ChatMessage;
+import 'offline_cache.dart';
 import 'reporter_service.dart';
 
 class ApiReporterService implements ReporterService {
-  ApiReporterService({required String baseUrl, required String bearerToken, int? myUserId})
+  ApiReporterService({required String baseUrl, required String bearerToken, int? myUserId, OfflineCache? cache})
     : _baseUrl = baseUrl,
       _bearerToken = bearerToken,
-      _myUserId = myUserId;
+      _myUserId = myUserId,
+      _cache = cache ?? OfflineCache();
 
   final String _baseUrl;
   final String _bearerToken;
   final int? _myUserId;
+  final OfflineCache _cache;
 
   /// Generous enough for a photo upload on a weak mobile connection.
   static const _submitTimeout = Duration(seconds: 90);
+
+  /// For reads, so a dead connection turns into "offline" instead of an
+  /// endless spinner.
+  static const _readTimeout = Duration(seconds: 20);
+
+  /// Cache entries are per account, so one account never sees another's.
+  String get _cacheOwner => _myUserId?.toString() ?? 'guest';
 
   @override
   int? get currentUserId => _myUserId;
@@ -178,7 +188,7 @@ class ApiReporterService implements ReporterService {
     final uri = Uri.parse(
       '$_baseUrl/api/reporter/reports/track',
     ).replace(queryParameters: queryParameters.isEmpty ? null : queryParameters);
-    final response = await http.get(uri, headers: _headers);
+    final response = await http.get(uri, headers: _headers).timeout(_readTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Failed to track report: ${response.body}');
@@ -189,7 +199,35 @@ class ApiReporterService implements ReporterService {
       return null;
     }
 
-    return TrackedReport.fromApi(json['report'] as Map<String, dynamic>);
+    final report = json['report'] as Map<String, dynamic>;
+    await _cache.save('tracked_report.$_cacheOwner', report);
+    return TrackedReport.fromApi(report);
+  }
+
+  @override
+  Future<CachedCopy<TrackedReport>?> cachedTrackedReport({String? trackingId}) async {
+    final copy = await _cache.load('tracked_report.$_cacheOwner');
+    if (copy == null) return null;
+    final report = TrackedReport.fromApi(copy.value);
+    if (trackingId != null && trackingId.toUpperCase() != report.trackingId.toUpperCase()) return null;
+    return CachedCopy(report, copy.savedAt);
+  }
+
+  @override
+  Future<List<ReportNotification>> loadReportNotifications(int reportId) async {
+    final uri = Uri.parse(
+      '$_baseUrl/api/reports/notifications',
+    ).replace(queryParameters: {'report_id': reportId.toString()});
+    final response = await http.get(uri, headers: _headers).timeout(_readTimeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to load notifications: ${response.statusCode}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return (json['notifications'] as List<dynamic>? ?? const [])
+        .map((item) => ReportNotification.fromApi(item as Map<String, dynamic>))
+        .toList();
   }
 
   @override
@@ -299,6 +337,7 @@ class ApiReporterService implements ReporterService {
     required double lat,
     required double lon,
     int groupSize = 1,
+    bool fromUserLocation = true,
   }) async {
     final uri = Uri.parse('$_baseUrl/api/evacuation/ranked').replace(
       queryParameters: {
@@ -307,13 +346,33 @@ class ApiReporterService implements ReporterService {
         'group_size': groupSize.toString(),
       },
     );
-    final response = await http.get(uri, headers: _headers);
+    final response = await http.get(uri, headers: _headers).timeout(_readTimeout);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Failed to load evacuation centers: ${response.body}');
     }
 
-    return EvacuationRankedResult.fromApi(jsonDecode(response.body) as Map<String, dynamic>);
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    await _cache.save('evacuation_centers.$_cacheOwner', fromUserLocation ? json : _withoutDistances(json));
+    return EvacuationRankedResult.fromApi(json);
+  }
+
+  /// The ranked list minus each center's distance and ETA, which were
+  /// measured from a fallback point, not from the user.
+  static Map<String, dynamic> _withoutDistances(Map<String, dynamic> json) => {
+    ...json,
+    'centres': [
+      for (final centre in (json['centres'] as List<dynamic>? ?? const []))
+        {...(centre as Map<String, dynamic>)}
+          ..remove('distance_km')
+          ..remove('eta_minutes'),
+    ],
+  };
+
+  @override
+  Future<CachedCopy<EvacuationRankedResult>?> cachedEvacuationCenters() async {
+    final copy = await _cache.load('evacuation_centers.$_cacheOwner');
+    return copy == null ? null : CachedCopy(EvacuationRankedResult.fromApi(copy.value), copy.savedAt);
   }
 
   @override

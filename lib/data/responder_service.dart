@@ -7,7 +7,25 @@ abstract class ResponderService {
   Stream<List<ChatMessage>> get chatStream;
 
   List<IncidentReport> get reports;
-  GeoPoint get currentResponderPoint;
+
+  /// Whether the assigned-report list is loaded and whether its last
+  /// refresh failed, so an empty or old list is never shown as current.
+  Stream<ReportListStatus> get reportListStatusStream;
+  ReportListStatus get reportListStatus;
+
+  /// Loads the assigned-report list now (e.g. from a Retry button).
+  Future<void> refreshReports();
+
+  /// The backend's assignment notification for each report newly assigned
+  /// while the app is open, each at most once.
+  Stream<AssignmentAlert> get assignmentAlerts;
+  /// Null until the device has a real GPS fix.
+  GeoPoint? get currentResponderPoint;
+
+  /// Whether this phone is sharing its location right now (only while a
+  /// report is en route/on scene). When false, [currentResponderPoint] is
+  /// only a last known position.
+  bool get isSharingLocation;
 
   List<ChatMessage> messagesFor(String reportId);
 

@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app/theme.dart';
+import '../data/offline_cache.dart';
 import '../data/osrm_route.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
@@ -38,11 +39,19 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
 
   bool _loadingPosition = true;
   String? _positionBanner;
+
+  /// Where centers are ranked from. Only a real device fix when
+  /// [_locationKnown]; otherwise the Lipa City centroid, which is never
+  /// drawn or used for distances, routes or ETAs.
   LatLng _position = _lipaFallback;
+  bool _locationKnown = false;
 
   EvacuationRankedResult? _result;
   bool _loadingCenters = false;
   String? _loadError;
+
+  /// Set while [_result] is the saved copy (server unreachable).
+  DateTime? _offlineSavedAt;
 
   int? _selectedAreaId;
   bool _arrived = false;
@@ -114,13 +123,17 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
       if (!mounted) return;
       setState(() {
         _position = LatLng(position.latitude, position.longitude);
+        _locationKnown = true;
         _loadingPosition = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _position = _lipaFallback;
-        _positionBanner = 'Location unavailable — showing centers near Lipa City.';
+        _locationKnown = false;
+        _positionBanner =
+            'Your location is unavailable. These are centers near Lipa City; '
+            'distances from you are not shown. Turn on location and tap Retry.';
         _loadingPosition = false;
       });
     }
@@ -137,19 +150,38 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
       final result = await widget.service.loadNearestEvacuationCenters(
         lat: _position.latitude,
         lon: _position.longitude,
+        fromUserLocation: _locationKnown,
       );
       if (!mounted) return;
       setState(() {
         _result = result;
+        _offlineSavedAt = null;
         _loadingCenters = false;
       });
       if (_mapReady) {
         _mapController.move(_position, 13);
       }
     } catch (e) {
+      final offline = isNetworkError(e);
+      CachedCopy<EvacuationRankedResult>? cached;
+      if (offline) {
+        try {
+          cached = await widget.service.cachedEvacuationCenters();
+        } catch (_) {
+          cached = null;
+        }
+      }
       if (!mounted) return;
       setState(() {
-        _loadError = 'Failed to load evacuation centers.';
+        if (cached != null) {
+          _result = cached.value;
+          _offlineSavedAt = cached.savedAt;
+        } else {
+          _loadError = offline
+              ? "You're offline and no evacuation centers have been saved on this phone yet. "
+                    'Connect to the internet and try again, or follow instructions from local authorities.'
+              : "Couldn't load evacuation centers right now. Please try again.";
+        }
         _loadingCenters = false;
       });
     }
@@ -219,6 +251,7 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
       final result = await widget.service.loadNearestEvacuationCenters(
         lat: _position.latitude,
         lon: _position.longitude,
+        fromUserLocation: _locationKnown,
       );
       if (!mounted) return;
       final stillListed = result.centres.any((c) => c.areaId == selected.areaId && !c.isFull);
@@ -269,7 +302,9 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     void fit() {
       if (!mounted) return;
       _mapController.fitCamera(
-        CameraFit.coordinates(coordinates: points, padding: const EdgeInsets.all(32)),
+        // Extra top room: a center's marker (status label above the pin,
+        // 58 px) sits above its point and would otherwise be cut off.
+        CameraFit.coordinates(coordinates: points, padding: const EdgeInsets.fromLTRB(32, 72, 32, 32)),
       );
     }
 
@@ -312,13 +347,9 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
           ? const Center(child: CircularProgressIndicator())
           : _loadError != null
           ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_loadError!),
-                  const SizedBox(height: 12),
-                  ElevatedButton(onPressed: _loadCenters, child: const Text('Retry')),
-                ],
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: ErrorRetry(message: _loadError!, onRetry: _acquireLocationAndLoad),
               ),
             )
           : _buildContent(),
@@ -335,17 +366,28 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     final routeTarget = centres.isEmpty
         ? null
         : centres.firstWhere((c) => c.areaId == _selectedAreaId, orElse: () => centres.first);
-    if (routeTarget != null) {
+    // A route needs a real starting point; none is drawn from the fallback.
+    final showRoute = routeTarget != null && _locationKnown;
+    if (showRoute) {
       _maybeFetchRoute(routeTarget);
     }
     final routeColor = routeTarget != null ? _parseHexColor(routeTarget.statusColor) : RapidAlertColors.dispatchBlue;
     final roadRoute = routeTarget != null && _routedAreaId == routeTarget.areaId ? _routePoints : null;
-    if (routeTarget != null) {
+    if (showRoute) {
       _fitRouteOnce(routeTarget, roadRoute);
     }
 
     return Column(
       children: [
+        if (_offlineSavedAt != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: OfflineBanner(
+              savedAt: _offlineSavedAt!,
+              onRetry: _acquireLocationAndLoad,
+              detail: 'Free slots and distances may have changed.',
+            ),
+          ),
         if (result?.warning != null) _banner(result!.warning!, RapidAlertColors.warning),
         if (_positionBanner != null)
           _banner(_positionBanner!, RapidAlertColors.lightText, action: TextButton(
@@ -368,7 +410,7 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'site.rapidalert.app',
               ),
-              if (routeTarget != null)
+              if (showRoute)
                 PolylineLayer(
                   polylines: [
                     Polyline(
@@ -383,21 +425,25 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
                 ),
               MarkerLayer(
                 markers: [
-                  Marker(
-                    point: _position,
-                    width: 24,
-                    height: 24,
-                    child: const Icon(Icons.my_location_rounded, color: RapidAlertColors.dispatchBlue),
-                  ),
+                  if (_locationKnown)
+                    Marker(
+                      point: _position,
+                      width: 24,
+                      height: 24,
+                      child: const Icon(
+                        Icons.my_location_rounded,
+                        color: RapidAlertColors.dispatchBlue,
+                        semanticLabel: 'Your location',
+                      ),
+                    ),
                   ...centres.map(
                     (c) => Marker(
                       point: LatLng(c.lat, c.lon),
-                      width: 32,
-                      height: 32,
-                      child: Tooltip(
-                        message: '${c.name}\n${c.statusLabel}',
-                        child: Icon(Icons.location_on_rounded, color: _parseHexColor(c.statusColor), size: 32),
-                      ),
+                      width: 96,
+                      height: 58,
+                      // The pin's tip sits on the point; the label is above it.
+                      alignment: Alignment.topCenter,
+                      child: _CenterMarker(center: c, color: _parseHexColor(c.statusColor)),
                     ),
                   ),
                 ],
@@ -479,8 +525,13 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            '${center.distanceKm.toStringAsFixed(1)} km · ${center.etaMinutes} min'
-            '${center.isGrey ? ' · Capacity unknown' : ' · ${center.availableSlots}/${center.capacity} slots'}',
+            [
+              // Measured from the ranking point: only meaningful from a real fix, and
+              // absent in an offline copy saved without one.
+              if (_locationKnown && center.distanceKm != null && center.etaMinutes != null)
+                '${center.distanceKm!.toStringAsFixed(1)} km · ${center.etaMinutes} min',
+              center.isGrey ? 'Capacity unknown' : '${center.availableSlots}/${center.capacity} slots',
+            ].join(' · '),
             style: const TextStyle(color: RapidAlertColors.lightText, fontSize: 13),
           ),
           const SizedBox(height: 12),
@@ -529,4 +580,55 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     final value = int.tryParse(cleaned, radix: 16) ?? 0x9ca3af;
     return Color(0xFF000000 | value);
   }
+}
+
+/// A map pin in the center's capacity colour with a short text label, so
+/// the status doesn't rely on colour alone.
+class _CenterMarker extends StatelessWidget {
+  const _CenterMarker({required this.center, required this.color});
+
+  final EvacuationCenter center;
+  final Color color;
+
+  /// Short forms of CapacityStatusResolver::LABELS for the map.
+  String get _shortLabel => switch (center.status) {
+    'green' => 'Open',
+    'orange' => 'Filling up',
+    'red' => 'Full',
+    'grey' => 'Unverified',
+    _ => center.statusLabel,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '${center.name}, ${center.statusLabel}',
+      child: Tooltip(
+        message: '${center.name}\n${center.statusLabel}',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: color, width: 1.5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _shortLabel,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: _darken(color)),
+              ),
+            ),
+            Icon(Icons.location_on_rounded, color: color, size: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Label text in a darker shade of the pin colour, for contrast on white.
+  static Color _darken(Color c) => Color.lerp(c, Colors.black, 0.35)!;
 }

@@ -132,3 +132,82 @@ class ScreenHeader extends StatelessWidget {
     );
   }
 }
+
+/// A plain-language failure message with a Retry button, in place of a raw
+/// exception.
+class ErrorRetry extends StatelessWidget {
+  const ErrorRetry({super.key, required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_off_rounded, size: 36, color: RapidAlertColors.lightText),
+          const SizedBox(height: 10),
+          Text(message, textAlign: TextAlign.center, style: const TextStyle(color: RapidAlertColors.darkText)),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: onRetry,
+            style: FilledButton.styleFrom(backgroundColor: RapidAlertColors.primaryRed),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Marks data as a saved copy, never live: an OFFLINE badge, when it was
+/// saved, and a Retry.
+class OfflineBanner extends StatelessWidget {
+  const OfflineBanner({super.key, required this.savedAt, required this.onRetry, this.detail});
+
+  final DateTime savedAt;
+  final VoidCallback? onRetry;
+  final String? detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = TimeOfDay.fromDateTime(savedAt).format(context);
+    final today = DateUtils.isSameDay(savedAt, DateTime.now());
+    final when = today ? saved : '${savedAt.month}/${savedAt.day} $saved';
+    final text = 'Showing the copy saved at $when.${detail != null ? ' $detail' : ''}';
+
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          border: Border.all(color: const Color(0xFFFED7AA)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: const Color(0xFF9A3412), borderRadius: BorderRadius.circular(6)),
+              child: const Text(
+                'OFFLINE',
+                style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(text, style: const TextStyle(fontSize: 12, color: Color(0xFF9A3412), fontWeight: FontWeight.w600)),
+            ),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
+      ),
+    );
+  }
+}

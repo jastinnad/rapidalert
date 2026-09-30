@@ -6,13 +6,19 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../app/theme.dart';
+import '../data/offline_cache.dart';
 import '../data/report_submission_ids.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
 import 'report_chat_screen.dart';
+import 'report_notifications_screen.dart';
 import 'ui_components.dart';
 
-const _liveTrackingStatuses = {'en_route', 'on_scene'};
+/// Statuses the screen keeps refreshing, so assignment and en route show up
+/// by themselves ('received' is the Need Help auto-report's first stage).
+/// Stops at resolved. The responder position itself only ever arrives
+/// (from the backend) while en_route/on_scene.
+const _pollingStatuses = {'reported', 'received', 'assigned', 'en_route', 'on_scene'};
 
 class ReportTrackingScreen extends StatefulWidget {
   const ReportTrackingScreen({super.key, required this.service, this.submissionIds});
@@ -33,6 +39,11 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
   bool _searched = false;
   String? _error;
   Timer? _pollTimer;
+
+  /// Set while [_report] is a saved copy (the server couldn't be reached):
+  /// when that copy was fetched. Null while the data is live.
+  DateTime? _offlineSavedAt;
+  DateTime? _lastLiveAt;
   late final _submissionIds = widget.submissionIds ?? ReportSubmissionIds();
 
   @override
@@ -80,21 +91,53 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
           ? null
           : await widget.service.trackReport(trackingId: trackingId, clientReportId: clientReportId);
       if (!mounted) return;
-      setState(() => _report = report);
+      setState(() {
+        _report = report;
+        _offlineSavedAt = null;
+        _lastLiveAt = DateTime.now();
+      });
       _syncPollTimer(report);
     } catch (e) {
-      if (!mounted || background) return;
-      setState(() => _error = 'Failed to load report. Try again.');
+      if (!mounted) return;
+      final offline = isNetworkError(e);
+      if (background) {
+        // Keep the card, but stop presenting it as live.
+        if (offline && _report != null) setState(() => _offlineSavedAt ??= _lastLiveAt ?? DateTime.now());
+        return;
+      }
+      final trackingId = _trackingIdController.text.trim();
+      CachedCopy<TrackedReport>? cached;
+      if (offline) {
+        try {
+          cached = await widget.service.cachedTrackedReport(trackingId: trackingId.isEmpty ? null : trackingId);
+        } catch (_) {
+          cached = null;
+        }
+      }
+      if (!mounted) return;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      setState(() {
+        if (cached != null) {
+          _report = cached.value;
+          _offlineSavedAt = cached.savedAt;
+        } else {
+          _report = null;
+          _error = offline
+              ? "You're offline and there's no saved copy of this report yet. Connect to the internet and try again."
+              : "Couldn't load your report right now. Please try again.";
+        }
+      });
     } finally {
       if (mounted && !background) setState(() => _loading = false);
     }
   }
 
-  /// Keeps re-fetching every ~7s while help is actively en route/on scene,
-  /// so the responder's position and ETA stay current; stops the moment the
-  /// status leaves that window (including mid-poll, e.g. once resolved).
+  /// Keeps re-fetching every ~7s until the report is resolved, so status
+  /// changes and the responder's position and ETA stay current;
+  /// stops the moment the status leaves that window (e.g. once resolved).
   void _syncPollTimer(TrackedReport? report) {
-    final shouldPoll = report != null && _liveTrackingStatuses.contains(report.status);
+    final shouldPoll = report != null && _pollingStatuses.contains(report.status);
     if (shouldPoll && _pollTimer == null) {
       _pollTimer = Timer.periodic(const Duration(seconds: 7), (_) => _search(background: true));
     } else if (!shouldPoll && _pollTimer != null) {
@@ -140,6 +183,7 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
                 const SizedBox(width: 8),
                 IconButton.filled(
                   onPressed: _loading ? null : _search,
+                  tooltip: 'Search report',
                   icon: const Icon(Icons.search_rounded),
                   style: IconButton.styleFrom(backgroundColor: RapidAlertColors.primaryRed),
                 ),
@@ -147,10 +191,21 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
             ),
             const SizedBox(height: 20),
             if (_loading) const Center(child: CircularProgressIndicator()),
-            if (!_loading && _error != null) Center(child: Text(_error!)),
+            if (!_loading && _error != null) ErrorRetry(message: _error!, onRetry: _search),
             if (!_loading && _error == null && _searched && _report == null)
-              const Center(child: Padding(padding: EdgeInsets.only(top: 40), child: Text('No report found.'))),
-            if (!_loading && _report != null) _ReportCard(report: _report!, service: widget.service),
+              const Center(
+                child: Padding(padding: EdgeInsets.only(top: 40), child: Text('No report found.')),
+              ),
+            if (!_loading && _report != null && _offlineSavedAt != null) ...[
+              OfflineBanner(
+                savedAt: _offlineSavedAt!,
+                onRetry: _search,
+                detail: 'Status and responder position may have changed.',
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (!_loading && _report != null)
+              _ReportCard(report: _report!, service: widget.service, offline: _offlineSavedAt != null),
           ],
         ),
       ),
@@ -159,10 +214,11 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
 }
 
 class _ReportCard extends StatelessWidget {
-  const _ReportCard({required this.report, required this.service});
+  const _ReportCard({required this.report, required this.service, required this.offline});
 
   final TrackedReport report;
   final ReporterService service;
+  final bool offline;
 
   @override
   Widget build(BuildContext context) {
@@ -176,20 +232,14 @@ class _ReportCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  report.trackingId,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                ),
+                child: Text(report.trackingId, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
               ),
               _StatusChip(status: report.status),
             ],
           ),
           const SizedBox(height: 10),
           Text(report.hazard, style: const TextStyle(fontWeight: FontWeight.w700)),
-          Text(
-            '${report.barangay}, ${report.city}',
-            style: const TextStyle(color: RapidAlertColors.lightText),
-          ),
+          Text('${report.barangay}, ${report.city}', style: const TextStyle(color: RapidAlertColors.lightText)),
           const SizedBox(height: 10),
           if (report.assignedResponderName != null) ...[
             Row(
@@ -217,7 +267,7 @@ class _ReportCard extends StatelessWidget {
             const SizedBox(height: 6),
           ],
           if (report.responderLat != null && report.responderLng != null) ...[
-            _ResponderTrackingCard(report: report),
+            _ResponderTrackingCard(report: report, offline: offline),
             const SizedBox(height: 10),
           ],
           Row(
@@ -232,13 +282,31 @@ class _ReportCard extends StatelessWidget {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: RapidAlertColors.background,
-                borderRadius: BorderRadius.circular(8),
-              ),
+              decoration: BoxDecoration(color: RapidAlertColors.background, borderRadius: BorderRadius.circular(8)),
               child: Text(report.adminComment),
             ),
           ],
+          const SizedBox(height: 8),
+          // The updates list needs an account (the backend keys it by user).
+          if (service.currentUserId != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ReportNotificationsScreen(service: service, reportId: report.id, trackingId: report.trackingId),
+                  ),
+                ),
+                icon: const Icon(Icons.notifications_none_rounded, size: 18),
+                label: const Text('View updates'),
+              ),
+            )
+          else
+            const Text(
+              'Sign in to see the list of updates sent about your report.',
+              style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+            ),
         ],
       ),
     );
@@ -246,9 +314,10 @@ class _ReportCard extends StatelessWidget {
 }
 
 class _ResponderTrackingCard extends StatelessWidget {
-  const _ResponderTrackingCard({required this.report});
+  const _ResponderTrackingCard({required this.report, required this.offline});
 
   final TrackedReport report;
+  final bool offline;
 
   static const _staleAfter = Duration(seconds: 60);
 
@@ -257,34 +326,39 @@ class _ResponderTrackingCard extends StatelessWidget {
     final point = LatLng(report.responderLat!, report.responderLng!);
     final updatedAt = report.responderLocationUpdatedAt;
     final age = updatedAt != null ? DateTime.now().difference(updatedAt) : null;
-    final isStale = age == null || age > _staleAfter;
+    // A saved copy is never live, however recent its timestamp.
+    final isStale = offline || age == null || age > _staleAfter;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: SizedBox(
-            height: 180,
-            child: IgnorePointer(
-              child: FlutterMap(
-                options: MapOptions(initialCenter: point, initialZoom: 14),
-                children: [
-                  TileLayer(
-                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'site.rapidalert.app',
-                  ),
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: point,
-                        width: 32,
-                        height: 32,
-                        child: const Icon(Icons.local_shipping_rounded, color: RapidAlertColors.enRoute, size: 32),
-                      ),
-                    ],
-                  ),
-                ],
+        Semantics(
+          label: offline ? "Map of the responder's last known position" : "Map of the responder's position",
+          image: true,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(
+              height: 180,
+              child: IgnorePointer(
+                child: FlutterMap(
+                  options: MapOptions(initialCenter: point, initialZoom: 14),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'site.rapidalert.app',
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: point,
+                          width: 32,
+                          height: 32,
+                          child: const Icon(Icons.local_shipping_rounded, color: RapidAlertColors.enRoute, size: 32),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -292,7 +366,9 @@ class _ResponderTrackingCard extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            if (report.etaMinutes != null) ...[
+            // An ETA worked out from an old position isn't current, so it's
+            // only shown while the position is live.
+            if (report.etaMinutes != null && !isStale) ...[
               const Icon(Icons.timer_outlined, size: 16, color: RapidAlertColors.lightText),
               const SizedBox(width: 6),
               Text('ETA ~${report.etaMinutes} min'),
@@ -321,6 +397,13 @@ class _ResponderTrackingCard extends StatelessWidget {
             ),
           ],
         ),
+        if (report.etaMinutes != null && isStale) ...[
+          const SizedBox(height: 4),
+          const Text(
+            "ETA unavailable until the responder's position updates.",
+            style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+          ),
+        ],
       ],
     );
   }

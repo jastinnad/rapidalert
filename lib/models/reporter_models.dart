@@ -175,6 +175,27 @@ class TrackedReport {
   }
 }
 
+/// One row of `GET /api/reports/notifications` (IncidentNotification).
+class ReportNotification {
+  const ReportNotification({required this.id, required this.message, required this.status, required this.createdAt});
+
+  final int id;
+  final String message;
+
+  /// The report status the notification was written for.
+  final String status;
+  final DateTime? createdAt;
+
+  factory ReportNotification.fromApi(Map<String, dynamic> json) {
+    return ReportNotification(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      message: json['message']?.toString() ?? '',
+      status: json['status']?.toString() ?? '',
+      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '')?.toLocal(),
+    );
+  }
+}
+
 class ReporterProfile {
   const ReporterProfile({
     required this.firstName,
@@ -265,8 +286,10 @@ class EvacuationCenter {
   /// re-derived, so mobile badge colors stay identical to the website's.
   final String statusColor;
   final String statusLabel;
-  final double distanceKm;
-  final int etaMinutes;
+  /// From the point the list was ranked from; null when unknown, e.g. in an
+  /// offline copy saved without the user's real location.
+  final double? distanceKm;
+  final int? etaMinutes;
   final double score;
   final bool isFull;
   final bool isGrey;
@@ -284,8 +307,8 @@ class EvacuationCenter {
       status: json['status']?.toString() ?? 'grey',
       statusColor: json['status_color']?.toString() ?? '#9ca3af',
       statusLabel: json['status_label']?.toString() ?? 'Unknown',
-      distanceKm: (json['distance_km'] as num?)?.toDouble() ?? 0,
-      etaMinutes: (json['eta_minutes'] as num?)?.toInt() ?? 0,
+      distanceKm: (json['distance_km'] as num?)?.toDouble(),
+      etaMinutes: (json['eta_minutes'] as num?)?.toInt(),
       score: (json['score'] as num?)?.toDouble() ?? 0,
       isFull: json['is_full'] == true,
       isGrey: json['is_grey'] == true,

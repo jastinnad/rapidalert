@@ -18,6 +18,7 @@ class AssignedReportsScreen extends StatefulWidget {
 class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
   ReportStatus? _filter;
   String? _updatingReportId;
+  bool _retrying = false;
 
   Future<void> _advanceStatus(IncidentReport report, ReportStatus nextStatus) async {
     setState(() => _updatingReportId = report.id);
@@ -33,8 +34,22 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
     }
   }
 
+  Future<void> _retryLoad() async {
+    setState(() => _retrying = true);
+    await widget.service.refreshReports();
+    if (mounted) setState(() => _retrying = false);
+  }
+
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<ReportListStatus>(
+      stream: widget.service.reportListStatusStream,
+      initialData: widget.service.reportListStatus,
+      builder: (context, statusSnapshot) => _buildList(context, statusSnapshot.data ?? const ReportListStatus()),
+    );
+  }
+
+  Widget _buildList(BuildContext context, ReportListStatus loadStatus) {
     return StreamBuilder<List<IncidentReport>>(
       stream: widget.service.reportsStream,
       initialData: widget.service.reports,
@@ -84,11 +99,30 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            if (filtered.isEmpty)
-              const GlassCard(
-                child: Text('No reports matched your selected filter.'),
+            // Never loaded: an empty list would wrongly read as "nothing assigned".
+            if (!loadStatus.loaded && loadStatus.errorMessage != null)
+              GlassCard(
+                child: ErrorRetry(message: loadStatus.errorMessage!, onRetry: _retrying ? null : _retryLoad),
               )
-            else
+            else if (!loadStatus.loaded)
+              const Padding(
+                padding: EdgeInsets.only(top: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else ...[
+              if (loadStatus.errorMessage != null) ...[
+                _RefreshFailedBanner(
+                  message: loadStatus.errorMessage!,
+                  lastLoadedAt: loadStatus.lastLoadedAt!,
+                  onRetry: _retrying ? null : _retryLoad,
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (filtered.isEmpty)
+                const GlassCard(
+                  child: Text('No reports matched your selected filter.'),
+                )
+              else
               ...filtered.map(
                 (report) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -146,6 +180,7 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
                   ),
                 ),
               ),
+            ],
           ],
         );
       },
@@ -175,6 +210,44 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
       child: Text(
         needHelp ? 'Need Help' : _reportStatusLabel(status),
         style: TextStyle(color: color, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+/// The list below is the last one that loaded, not a current one.
+class _RefreshFailedBanner extends StatelessWidget {
+  const _RefreshFailedBanner({required this.message, required this.lastLoadedAt, required this.onRetry});
+
+  final String message;
+  final DateTime lastLoadedAt;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          border: Border.all(color: const Color(0xFFFED7AA)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Color(0xFF9A3412), size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '$message Showing the list from ${DateFormat('h:mm a').format(lastLoadedAt)}.',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9A3412), fontWeight: FontWeight.w600),
+              ),
+            ),
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
       ),
     );
   }

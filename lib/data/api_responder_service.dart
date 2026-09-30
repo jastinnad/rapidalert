@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/responder_models.dart';
 import 'backend_features.dart';
+import 'offline_cache.dart' show isNetworkError;
 import 'responder_service.dart';
 
 class ApiResponderService implements ResponderService {
@@ -32,6 +33,15 @@ class ApiResponderService implements ResponderService {
   final _evacuationController = StreamController<List<EvacuationRecordEntry>>.broadcast();
   final _announcementsController = StreamController<List<Announcement>>.broadcast();
   final _resourcesController = StreamController<List<ResourceRequestEntry>>.broadcast();
+  final _reportListStatusController = StreamController<ReportListStatus>.broadcast();
+  final _assignmentAlertsController = StreamController<AssignmentAlert>.broadcast();
+
+  ReportListStatus _reportListStatus = const ReportListStatus();
+
+  /// Report IDs in the last successfully loaded list; null before the first
+  /// load, which is the baseline (only assignments made after it are new).
+  Set<String>? _knownReportIds;
+  final _announcedNotificationIds = <int>{};
 
   final List<IncidentReport> _reports = [];
   final List<CoordinationEvent> _events = [];
@@ -52,7 +62,8 @@ class ApiResponderService implements ResponderService {
   Timer? _gpsHeartbeat;
   DateTime? _lastGpsPingAt;
 
-  GeoPoint _responderPoint = const GeoPoint(lat: 13.9412, lng: 121.1631);
+  /// Null until the first real GPS fix; never a made-up position.
+  GeoPoint? _responderPoint;
   String? _activeReportId;
   List<ActiveTrackingAssignment> _activeTrackingAssignments = const [];
 
@@ -72,7 +83,22 @@ class ApiResponderService implements ResponderService {
   List<IncidentReport> get reports => List.unmodifiable(_reports);
 
   @override
-  GeoPoint get currentResponderPoint => _responderPoint;
+  Stream<ReportListStatus> get reportListStatusStream => _reportListStatusController.stream;
+
+  @override
+  ReportListStatus get reportListStatus => _reportListStatus;
+
+  @override
+  Future<void> refreshReports() => _refreshReports();
+
+  @override
+  Stream<AssignmentAlert> get assignmentAlerts => _assignmentAlertsController.stream;
+
+  @override
+  GeoPoint? get currentResponderPoint => _responderPoint;
+
+  @override
+  bool get isSharingLocation => _gpsSub != null;
 
   @override
   List<ChatMessage> messagesFor(String reportId) {
@@ -292,12 +318,13 @@ class ApiResponderService implements ResponderService {
     _evacuationController.close();
     _announcementsController.close();
     _resourcesController.close();
+    _reportListStatusController.close();
+    _assignmentAlertsController.close();
   }
 
   Future<void> _bootstrap() async {
     _reportsController.add(const <IncidentReport>[]);
     _eventsController.add(const <CoordinationEvent>[]);
-    _trackingController.add(_responderPoint);
     _chatController.add(const <ChatMessage>[]);
     _followUpsController.add(const <FollowUp>[]);
     _evacuationController.add(const <EvacuationRecordEntry>[]);
@@ -355,27 +382,101 @@ class ApiResponderService implements ResponderService {
     }
   }
 
+  /// Never throws: a failed load is reported through [reportListStatus] and
+  /// the last good list is kept (it used to throw inside [_bootstrap] when
+  /// the app started offline, so polling never began).
   Future<void> _refreshReports() async {
     final endpoint = Uri.parse('$_baseUrl/api/responder/reports');
-    final response = await http.get(endpoint, headers: _headers);
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+    final http.Response response;
+    try {
+      response = await http.get(endpoint, headers: _headers).timeout(const Duration(seconds: 20));
+    } catch (e) {
+      _setReportListError(
+        isNetworkError(e)
+            ? "You're offline. Assigned reports can't be refreshed until you reconnect."
+            : "Couldn't load your assigned reports.",
+      );
       return;
     }
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final payload = (json['reports'] as List<dynamic>? ?? const []);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _setReportListError("Couldn't load your assigned reports.");
+      return;
+    }
+
+    final List<IncidentReport> loaded;
+    try {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final payload = (json['reports'] as List<dynamic>? ?? const []);
+      loaded = payload.map((item) => item as Map<String, dynamic>).map(_reportFromApi).toList();
+    } catch (_) {
+      _setReportListError("Couldn't load your assigned reports.");
+      return;
+    }
 
     _reports
       ..clear()
-      ..addAll(
-        payload.map((item) => item as Map<String, dynamic>).map(_reportFromApi),
-      );
+      ..addAll(loaded);
 
     _reportsController.add(List.unmodifiable(_reports));
+    _setReportListStatus(ReportListStatus(lastLoadedAt: DateTime.now()));
+    _announceNewAssignments();
 
     if (_activeReportId != null) {
       await _refreshMessages(_activeReportId!);
+    }
+  }
+
+  void _setReportListStatus(ReportListStatus status) {
+    _reportListStatus = status;
+    if (!_reportListStatusController.isClosed) _reportListStatusController.add(status);
+  }
+
+  void _setReportListError(String message) =>
+      _setReportListStatus(ReportListStatus(lastLoadedAt: _reportListStatus.lastLoadedAt, errorMessage: message));
+
+  void _announceNewAssignments() {
+    final ids = _reports.map((r) => r.id).toSet();
+    final known = _knownReportIds;
+    _knownReportIds = ids;
+    if (known == null) return;
+    for (final id in ids.difference(known)) {
+      unawaited(_announceAssignment(id));
+    }
+  }
+
+  /// Shows the backend's own notification for a newly assigned report:
+  /// "New assignment: …" (one-click assign) or "Responder has been assigned
+  /// to report …" (the assignment queue). With neither, nothing is shown —
+  /// the report is in the list anyway. Best-effort; not retried.
+  Future<void> _announceAssignment(String reportId) async {
+    try {
+      final uri = Uri.parse(
+        '$_baseUrl/api/reports/notifications',
+      ).replace(queryParameters: {'report_id': reportId});
+      final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 20));
+      if (response.statusCode < 200 || response.statusCode >= 300) return;
+
+      final items = (jsonDecode(response.body) as Map<String, dynamic>)['notifications'] as List<dynamic>? ?? const [];
+      Map<String, dynamic>? match;
+      for (final item in items.cast<Map<String, dynamic>>()) {
+        // The backend lists newest first.
+        final message = item['message']?.toString() ?? '';
+        if (message.startsWith('New assignment') || message.contains('has been assigned')) {
+          match = item;
+          break;
+        }
+      }
+      final notificationId = (match?['id'] as num?)?.toInt();
+      if (match == null || notificationId == null || !_announcedNotificationIds.add(notificationId)) return;
+
+      if (!_assignmentAlertsController.isClosed) {
+        _assignmentAlertsController.add(
+          AssignmentAlert(notificationId: notificationId, reportId: reportId, message: match['message'].toString()),
+        );
+      }
+    } catch (_) {
+      // Best-effort: the report already shows in the assigned list.
     }
   }
 
@@ -511,9 +612,17 @@ class ApiResponderService implements ResponderService {
   /// Polls which reports (if any) the responder is currently `en_route`/
   /// `on_scene` for, and starts/stops the real GPS stream accordingly — GPS
   /// never runs while there's no active assignment to push it to.
+  /// Never throws on a network failure: it runs inside [_bootstrap], where
+  /// an offline start used to abort before this poll was created, so GPS
+  /// sharing never resumed for an en-route report. Keeps the last state.
   Future<void> _refreshActiveTracking() async {
     final endpoint = Uri.parse('$_baseUrl/api/responder/active-tracking');
-    final response = await http.get(endpoint, headers: _headers);
+    final http.Response response;
+    try {
+      response = await http.get(endpoint, headers: _headers).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      return;
+    }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return;
@@ -592,8 +701,9 @@ class ApiResponderService implements ResponderService {
 
   void _onPosition(Position position) {
     _lastGpsPingAt = DateTime.now();
-    _responderPoint = GeoPoint(lat: position.latitude, lng: position.longitude);
-    _trackingController.add(_responderPoint);
+    final point = GeoPoint(lat: position.latitude, lng: position.longitude, recordedAt: position.timestamp);
+    _responderPoint = point;
+    _trackingController.add(point);
 
     for (final assignment in _activeTrackingAssignments) {
       _postTrackingToApi(assignment.reportId.toString());
@@ -604,12 +714,14 @@ class ApiResponderService implements ResponderService {
     final endpoint = Uri.parse(
       '$_baseUrl/api/responder/reports/$reportId/tracking',
     );
+    final point = _responderPoint;
+    if (point == null) return;
     await http.post(
       endpoint,
       headers: _headers,
       body: jsonEncode({
-        'latitude': _responderPoint.lat,
-        'longitude': _responderPoint.lng,
+        'latitude': point.lat,
+        'longitude': point.lng,
       }),
     );
   }
@@ -640,8 +752,9 @@ class ApiResponderService implements ResponderService {
         (item['updatedAt'] as num?)?.toInt() ??
             DateTime.now().millisecondsSinceEpoch,
       ),
-      reporterLat: _toDouble(item['latitude']) ?? 13.9412,
-      reporterLng: _toDouble(item['longitude']) ?? 121.1631,
+      // No default: a report without GPS must not appear at a made-up spot.
+      reporterLat: _toDouble(item['latitude']),
+      reporterLng: _toDouble(item['longitude']),
       reporterUserId: (item['reporterUserId'] as num?)?.toInt(),
     );
   }

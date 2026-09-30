@@ -215,7 +215,12 @@ class _ReporterDashboardTabState extends State<_ReporterDashboardTab> {
       }
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to update status.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Couldn't update your status. Check your connection and try again."),
+          action: SnackBarAction(label: 'Retry', onPressed: () => _setStatus(status)),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _updatingStatus = false);
     }

@@ -50,6 +50,21 @@ class MockResponderService implements ResponderService {
   @override
   List<IncidentReport> get reports => List.unmodifiable(_reports);
 
+  // Sample data is always "loaded" and never produces assignment alerts.
+  late final _loadedStatus = ReportListStatus(lastLoadedAt: DateTime.now());
+
+  @override
+  Stream<ReportListStatus> get reportListStatusStream => const Stream.empty();
+
+  @override
+  ReportListStatus get reportListStatus => _loadedStatus;
+
+  @override
+  Future<void> refreshReports() async {}
+
+  @override
+  Stream<AssignmentAlert> get assignmentAlerts => const Stream.empty();
+
   @override
   Stream<List<FollowUp>> get followUpsStream => _followUpsController.stream;
 
@@ -278,6 +293,9 @@ class MockResponderService implements ResponderService {
   GeoPoint get currentResponderPoint => _responderPoint;
 
   @override
+  bool get isSharingLocation => true;
+
+  @override
   void dispose() {
     _reportTimer.cancel();
     _eventTimer.cancel();
@@ -483,6 +501,7 @@ class MockResponderService implements ResponderService {
       _responderPoint = GeoPoint(
         lat: _responderPoint.lat + (_random.nextDouble() - 0.5) * 0.0007,
         lng: _responderPoint.lng + (_random.nextDouble() - 0.5) * 0.0007,
+        recordedAt: DateTime.now(),
       );
       _trackingController.add(_responderPoint);
     });
