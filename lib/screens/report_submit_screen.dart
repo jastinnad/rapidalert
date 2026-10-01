@@ -71,9 +71,20 @@ String reportSubmitErrorMessage(Object error) {
 }
 
 class ReportSubmitScreen extends StatefulWidget {
-  const ReportSubmitScreen({super.key, required this.service, this.isGuest = false, this.submissionIds});
+  const ReportSubmitScreen({
+    super.key,
+    required this.service,
+    this.isGuest = false,
+    this.submissionIds,
+    this.onOpenTracking,
+    this.onOpenEvacuation,
+  });
 
   final ReporterService service;
+
+  /// Next steps offered after a report is stored (switch to those tabs).
+  final VoidCallback? onOpenTracking;
+  final VoidCallback? onOpenEvacuation;
 
   /// Per-report `client_report_id`s; defaults to the device's secure storage.
   final ReportSubmissionIds? submissionIds;
@@ -429,12 +440,40 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
         message = reportSubmitSuccessMessage(result);
       }
       setState(() => _submitStatus = (kind: result == null ? _SubmitStatus.warning : _SubmitStatus.success, text: message));
+      final trackingId = result?.trackingId ?? outcome.earlierTrackingId;
+      void closeThen(VoidCallback? next) {
+        Navigator.of(context).pop();
+        next?.call();
+      }
+
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
           title: Text(title),
-          content: Text(result == null ? message : '$message\n\nSave this ID to track your report\'s status.'),
-          actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('OK'))],
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(message),
+              if (trackingId != null && trackingId.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                const Text('Tracking ID', style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText)),
+                SelectableText(
+                  trackingId,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                ),
+                const SizedBox(height: 6),
+                const Text("Save this ID to track your report's status."),
+              ],
+            ],
+          ),
+          actions: [
+            if (widget.onOpenEvacuation != null)
+              TextButton(onPressed: () => closeThen(widget.onOpenEvacuation), child: const Text('Evacuation')),
+            if (widget.onOpenTracking != null)
+              FilledButton(onPressed: () => closeThen(widget.onOpenTracking), child: const Text('Track report')),
+            TextButton(onPressed: () => closeThen(null), child: const Text('OK')),
+          ],
         ),
       );
       // Keep changes that weren't stored, so they can be sent as a new

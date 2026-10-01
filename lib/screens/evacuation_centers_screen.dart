@@ -590,12 +590,13 @@ class _CenterMarker extends StatelessWidget {
   final EvacuationCenter center;
   final Color color;
 
-  /// Short forms of CapacityStatusResolver::LABELS for the map.
+  /// Short forms of CapacityStatusResolver::LABELS for the map (the demo
+  /// spec's OPEN / LIMITED / FULL wording).
   String get _shortLabel => switch (center.status) {
-    'green' => 'Open',
-    'orange' => 'Filling up',
-    'red' => 'Full',
-    'grey' => 'Unverified',
+    'green' => 'OPEN',
+    'orange' => 'LIMITED',
+    'red' => 'FULL',
+    'grey' => 'UNVERIFIED',
     _ => center.statusLabel,
   };
 

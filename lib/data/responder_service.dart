@@ -29,6 +29,10 @@ abstract class ResponderService {
 
   List<ChatMessage> messagesFor(String reportId);
 
+  /// Loads one report's chat now. Throws when it can't (no connection,
+  /// server error), so the chat screen can say so instead of looking empty.
+  Future<void> loadMessages(String reportId);
+
   Future<void> updateReportStatus(String reportId, ReportStatus status);
 
   Future<void> sendResponderMessage({

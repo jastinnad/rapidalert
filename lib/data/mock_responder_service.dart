@@ -224,6 +224,9 @@ class MockResponderService implements ResponderService {
   }
 
   @override
+  Future<void> loadMessages(String reportId) async {}
+
+  @override
   Future<void> sendResponderMessage({
     required String reportId,
     required int receiverId,

@@ -501,14 +501,24 @@ class ApiResponderService implements ResponderService {
     _eventsController.add(List.unmodifiable(_events));
   }
 
+  /// Background refresh: keeps the last messages on failure (the chat
+  /// screen reports its own load errors through [loadMessages]).
   Future<void> _refreshMessages(String reportId) async {
+    try {
+      await loadMessages(reportId);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> loadMessages(String reportId) async {
+    _activeReportId = reportId;
     final endpoint = Uri.parse(
       '$_baseUrl/api/reports/messages',
     ).replace(queryParameters: {'report_id': reportId});
-    final response = await http.get(endpoint, headers: _headers);
+    final response = await http.get(endpoint, headers: _headers).timeout(const Duration(seconds: 20));
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      return;
+      throw Exception('Failed to load messages (${response.statusCode})');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;

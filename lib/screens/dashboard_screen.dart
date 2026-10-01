@@ -18,16 +18,25 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<ReportListStatus>(
+      stream: service.reportListStatusStream,
+      initialData: service.reportListStatus,
+      builder: (context, statusSnapshot) => _build(context, statusSnapshot.data ?? const ReportListStatus()),
+    );
+  }
+
+  Widget _build(BuildContext context, ReportListStatus loadStatus) {
     return StreamBuilder<List<IncidentReport>>(
       stream: service.reportsStream,
       initialData: service.reports,
       builder: (context, snapshot) {
         final reports = snapshot.data ?? const <IncidentReport>[];
+        // Until the list has loaded, a count of 0 would be a guess.
+        String count(int n) => loadStatus.loaded ? '$n' : '—';
+        final open = reports.where((r) => r.status != ReportStatus.resolved && r.status != ReportStatus.completed);
         final assigned = reports.length;
-        final openCases = reports
-            .where((r) => r.status != ReportStatus.completed)
-            .length;
-        final needHelp = reports.where((r) => r.needHelp).length;
+        final openCases = open.length;
+        final needHelp = open.where((r) => r.needHelp).length;
 
         return StreamBuilder<List<EvacuationRecordEntry>>(
           stream: service.evacuationRecordsStream,
@@ -55,21 +64,16 @@ class DashboardScreen extends StatelessWidget {
                     _summaryCard(
                       context,
                       title: 'Assigned Reports',
-                      value: assigned.toString(),
+                      value: count(assigned),
                       color: RapidAlertColors.primaryRed,
                     ),
                     _summaryCard(
                       context,
                       title: 'Open Cases',
-                      value: openCases.toString(),
+                      value: count(openCases),
                       color: RapidAlertColors.operationsBlue,
                     ),
-                    _summaryCard(
-                      context,
-                      title: 'Need Help',
-                      value: needHelp.toString(),
-                      color: RapidAlertColors.warning,
-                    ),
+                    _summaryCard(context, title: 'Need Help', value: count(needHelp), color: RapidAlertColors.warning),
                     if (BackendFeatures.evacuationRecords)
                       _summaryCard(
                         context,
@@ -79,6 +83,26 @@ class DashboardScreen extends StatelessWidget {
                       ),
                   ],
                 ),
+                if (loadStatus.errorMessage != null) ...[
+                  const SizedBox(height: 12),
+                  GlassCard(
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: RapidAlertColors.warning, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            loadStatus.loaded
+                                ? '${loadStatus.errorMessage} Counts are from the last successful load.'
+                                : loadStatus.errorMessage!,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        TextButton(onPressed: service.refreshReports, child: const Text('Retry')),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 GlassCard(
                   padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
@@ -87,65 +111,46 @@ class DashboardScreen extends StatelessWidget {
                     children: [
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 10),
-                        child: Text(
-                          'Responder Modules',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                        ),
+                        child: Text('Responder Modules', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
                       ),
                       // Modules whose endpoints aren't in production yet stay
                       // hidden until their BackendFeatures flag is turned on.
                       ..._withDividers([
-                        _ModuleRow(
-                          'Track Assigned Reports',
-                          Icons.assignment_rounded,
-                          onTap: () => onNavigateToTab(1),
-                        ),
-                        _ModuleRow(
-                          'Map Responder to Reporter',
-                          Icons.map_rounded,
-                          onTap: () => onNavigateToTab(2),
-                        ),
-                        _ModuleRow(
-                          'Responder Chat to Reporter',
-                          Icons.chat_rounded,
-                          onTap: () => onNavigateToTab(3),
-                        ),
-                        _ModuleRow(
-                          'Real-Time Coordination',
-                          Icons.podcasts_rounded,
-                          onTap: () => onNavigateToTab(4),
-                        ),
+                        _ModuleRow('Track Assigned Reports', Icons.assignment_rounded, onTap: () => onNavigateToTab(1)),
+                        _ModuleRow('Map Responder to Reporter', Icons.map_rounded, onTap: () => onNavigateToTab(2)),
+                        _ModuleRow('Responder Chat to Reporter', Icons.chat_rounded, onTap: () => onNavigateToTab(3)),
+                        _ModuleRow('Real-Time Coordination', Icons.podcasts_rounded, onTap: () => onNavigateToTab(4)),
                         if (BackendFeatures.followUps)
                           _ModuleRow(
                             'Follow-Up Board',
                             Icons.event_note_rounded,
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => FollowUpBoardScreen(service: service)),
-                            ),
+                            onTap: () => Navigator.of(
+                              context,
+                            ).push(MaterialPageRoute(builder: (_) => FollowUpBoardScreen(service: service))),
                           ),
                         if (BackendFeatures.evacuationRecords)
                           _ModuleRow(
                             'Evacuation Tracker',
                             Icons.home_work_rounded,
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => EvacuationTrackerScreen(service: service)),
-                            ),
+                            onTap: () => Navigator.of(
+                              context,
+                            ).push(MaterialPageRoute(builder: (_) => EvacuationTrackerScreen(service: service))),
                           ),
                         if (BackendFeatures.responderAnnouncements)
                           _ModuleRow(
                             'Announcements',
                             Icons.campaign_rounded,
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => AnnouncementsScreen(service: service)),
-                            ),
+                            onTap: () => Navigator.of(
+                              context,
+                            ).push(MaterialPageRoute(builder: (_) => AnnouncementsScreen(service: service))),
                           ),
                         if (BackendFeatures.resources)
                           _ModuleRow(
                             'Resources',
                             Icons.inventory_2_rounded,
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => ResourcesScreen(service: service)),
-                            ),
+                            onTap: () => Navigator.of(
+                              context,
+                            ).push(MaterialPageRoute(builder: (_) => ResourcesScreen(service: service))),
                           ),
                       ]),
                     ],
@@ -161,18 +166,10 @@ class DashboardScreen extends StatelessWidget {
 
   /// Draws a divider under every module row except the last one shown.
   List<Widget> _withDividers(List<_ModuleRow> rows) {
-    return [
-      for (var i = 0; i < rows.length; i++)
-        i == rows.length - 1 ? rows[i].asLast() : rows[i],
-    ];
+    return [for (var i = 0; i < rows.length; i++) i == rows.length - 1 ? rows[i].asLast() : rows[i]];
   }
 
-  Widget _summaryCard(
-    BuildContext context, {
-    required String title,
-    required String value,
-    required Color color,
-  }) {
+  Widget _summaryCard(BuildContext context, {required String title, required String value, required Color color}) {
     final width = (MediaQuery.of(context).size.width - 44) / 2;
     return SizedBox(
       width: width,
@@ -182,24 +179,11 @@ class DashboardScreen extends StatelessWidget {
           children: [
             Container(
               height: 6,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(30),
-              ),
+              decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(30)),
             ),
             const SizedBox(height: 10),
-            Text(
-              value,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: RapidAlertColors.lightText,
-              ),
-            ),
+            Text(value, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800)),
+            Text(title, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: RapidAlertColors.lightText)),
           ],
         ),
       ),
@@ -224,9 +208,7 @@ class _ModuleRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          border: isLast
-              ? null
-              : const Border(bottom: BorderSide(color: RapidAlertColors.border)),
+          border: isLast ? null : const Border(bottom: BorderSide(color: RapidAlertColors.border)),
         ),
         child: Row(
           children: [

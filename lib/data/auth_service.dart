@@ -46,6 +46,23 @@ class AuthService {
   AuthService._();
 
   static const _storage = FlutterSecureStorage();
+
+  static const _requestTimeout = Duration(seconds: 20);
+
+  /// What a user sees for a failed sign-in/registration. A 4xx `message` is
+  /// written for users ("These credentials do not match…"); a 5xx one can be
+  /// a raw server error (SQL, hosts), so it is never shown.
+  static String failureMessage(int statusCode, String? serverMessage, String action) {
+    if (statusCode >= 500) {
+      return 'Rapid Alert is having trouble right now. Please try again in a moment.';
+    }
+    if (statusCode == 429) {
+      return 'Too many attempts. Please wait a minute and try again.';
+    }
+    final message = serverMessage?.trim();
+    return message != null && message.isNotEmpty ? message : '$action failed. Please check your details and try again.';
+  }
+
   static const _tokenKey = 'rapid_alert_token';
   static const _userIdKey = 'rapid_alert_user_id';
   static const _firstNameKey = 'rapid_alert_first_name';
@@ -58,18 +75,13 @@ class AuthService {
 
     late final http.Response response;
     try {
-      response = await http.post(
-        endpoint,
-        headers: const {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-          'device_name': 'flutter-mobile-app',
-        }),
-      );
+      response = await http
+          .post(
+            endpoint,
+            headers: const {'Accept': 'application/json', 'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'password': password, 'device_name': 'flutter-mobile-app'}),
+          )
+          .timeout(_requestTimeout);
     } catch (_) {
       throw AuthException('Unable to reach the server. Check your connection.');
     }
@@ -77,8 +89,7 @@ class AuthService {
     final body = _tryDecode(response.body);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = body?['message'] as String?;
-      throw AuthException(message ?? 'Sign in failed (${response.statusCode}).');
+      throw AuthException(failureMessage(response.statusCode, body?['message'] as String?, 'Sign in'));
     }
 
     if (body == null) {
@@ -107,25 +118,24 @@ class AuthService {
 
     late final http.Response response;
     try {
-      response = await http.post(
-        endpoint,
-        headers: const {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'first_name': firstName,
-          'last_name': lastName,
-          'email': email,
-          'phone': phone,
-          'password': password,
-          'password_confirmation': password,
-          'house_no': houseNo,
-          'purok': purok,
-          'barangay': barangay,
-          if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
-        }),
-      );
+      response = await http
+          .post(
+            endpoint,
+            headers: const {'Accept': 'application/json', 'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'first_name': firstName,
+              'last_name': lastName,
+              'email': email,
+              'phone': phone,
+              'password': password,
+              'password_confirmation': password,
+              'house_no': houseNo,
+              'purok': purok,
+              'barangay': barangay,
+              if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
+            }),
+          )
+          .timeout(_requestTimeout);
     } catch (_) {
       throw AuthException('Unable to reach the server. Check your connection.');
     }
@@ -133,12 +143,12 @@ class AuthService {
     final body = _tryDecode(response.body);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = body?['message'] as String?;
-      final errors = body?['errors'] as Map<String, dynamic>?;
-      final firstError = errors?.values.first is List
-          ? (errors!.values.first as List).first?.toString()
-          : null;
-      throw AuthException(firstError ?? message ?? 'Registration failed (${response.statusCode}).');
+      // Field errors come with 4xx validation responses only.
+      final errors = response.statusCode < 500 ? (body?['errors'] as Map<String, dynamic>?) : null;
+      final firstError = errors?.values.first is List ? (errors!.values.first as List).first?.toString() : null;
+      throw AuthException(
+        firstError ?? failureMessage(response.statusCode, body?['message'] as String?, 'Registration'),
+      );
     }
 
     if (body == null) {
@@ -171,13 +181,7 @@ class AuthService {
     if (session != null) {
       final endpoint = Uri.parse('${AppConfig.apiBaseUrl}/api/auth/logout');
       try {
-        await http.post(
-          endpoint,
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ${session.token}',
-          },
-        );
+        await http.post(endpoint, headers: {'Accept': 'application/json', 'Authorization': 'Bearer ${session.token}'});
       } catch (_) {
         // Best-effort: still clear the local session even if this fails.
       }

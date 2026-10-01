@@ -47,7 +47,12 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
   Widget build(BuildContext context) {
     final pages = widget.isGuest
         ? [
-            ReportSubmitScreen(service: _service, isGuest: true),
+            ReportSubmitScreen(
+              service: _service,
+              isGuest: true,
+              onOpenTracking: () => setState(() => _index = 1),
+              onOpenEvacuation: () => setState(() => _index = 2),
+            ),
             ReportTrackingScreen(service: _service),
             EvacuationCentersScreen(service: _service, active: _index == 2),
           ]
@@ -57,7 +62,11 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
               session: widget.session,
               onNavigateToTab: (i) => setState(() => _index = i),
             ),
-            ReportSubmitScreen(service: _service),
+            ReportSubmitScreen(
+              service: _service,
+              onOpenTracking: () => setState(() => _index = 2),
+              onOpenEvacuation: () => setState(() => _index = 3),
+            ),
             ReportTrackingScreen(service: _service),
             EvacuationCentersScreen(service: _service, active: _index == 3),
           ];
@@ -211,6 +220,9 @@ class _ReporterDashboardTabState extends State<_ReporterDashboardTab> {
       if (!mounted) return;
       setState(() => _status = resolved);
       if (resolved == CheckInStatus.needHelp) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Need Help sent. CDRRMO dispatchers can now see that you need help.')),
+        );
         widget.onNavigateToTab(2);
       }
     } catch (_) {
@@ -224,6 +236,30 @@ class _ReporterDashboardTabState extends State<_ReporterDashboardTab> {
     } finally {
       if (mounted) setState(() => _updatingStatus = false);
     }
+  }
+
+  /// Need Help alerts dispatchers (and may open a report), so it's confirmed
+  /// first; switching back to "I'm Safe" isn't.
+  Future<void> _confirmNeedHelp() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Send a Need Help alert?'),
+        content: const Text(
+          'This tells CDRRMO dispatchers that you need help now. It may also open an emergency '
+          'report for your registered address so a responder can be assigned.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: RapidAlertColors.primaryRed),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Send Need Help'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await _setStatus(CheckInStatus.needHelp);
   }
 
   @override
@@ -265,7 +301,7 @@ class _ReporterDashboardTabState extends State<_ReporterDashboardTab> {
                       icon: Icons.warning_amber_rounded,
                       color: RapidAlertColors.primaryRed,
                       selected: _status == CheckInStatus.needHelp,
-                      onTap: _updatingStatus ? null : () => _setStatus(CheckInStatus.needHelp),
+                      onTap: _updatingStatus || _status == CheckInStatus.needHelp ? null : _confirmNeedHelp,
                     ),
                   ),
                 ],

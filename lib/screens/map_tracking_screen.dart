@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app/theme.dart';
 import '../data/osrm_route.dart';
@@ -324,6 +325,15 @@ class _MapTrackingScreenState extends State<MapTrackingScreen> {
                           style: const TextStyle(fontSize: 12, color: RapidAlertColors.success),
                         ),
                       ],
+                      // Turn-by-turn navigation to the report's real position.
+                      if (reporterPoint != null) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () => _openInMaps(reporterPoint),
+                          icon: const Icon(Icons.navigation_rounded, size: 18),
+                          label: const Text('Open in Google Maps'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -365,6 +375,22 @@ class _MapTrackingScreenState extends State<MapTrackingScreen> {
   }
 
   double _degreesToRadians(double degrees) => degrees * pi / 180;
+
+  Future<void> _openInMaps(LatLng destination) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1'
+      '&destination=${destination.latitude},${destination.longitude}&travelmode=driving',
+    );
+    var opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't open a maps app.")));
+    }
+  }
 
   static String _formatAge(Duration age) {
     if (age.inMinutes < 1) return '${age.inSeconds < 0 ? 0 : age.inSeconds}s';
