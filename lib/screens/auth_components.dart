@@ -231,6 +231,127 @@ class AuthField extends StatelessWidget {
   }
 }
 
+/// A labelled pick-one field styled like [AuthField], for values that must come
+/// from a fixed list (e.g. the PSGC address lists). While [items] is
+/// unavailable it shows a loading line, or [error] with a Retry action.
+class AuthDropdownField extends StatelessWidget {
+  const AuthDropdownField({
+    super.key,
+    required this.label,
+    required this.glyph,
+    required this.hint,
+    required this.items,
+    required this.value,
+    required this.onChanged,
+    this.itemLabel,
+    this.enabled = true,
+    this.loading = false,
+    this.loadingText = 'Loading…',
+    this.error,
+    this.onRetry,
+    this.helper,
+  });
+
+  final String label;
+  final String glyph;
+  final String hint;
+  final List<String> items;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  /// Text shown for an item when the item itself is a code.
+  final String Function(String item)? itemLabel;
+  final bool enabled;
+  final bool loading;
+  final String loadingText;
+  final String? error;
+  final VoidCallback? onRetry;
+  final String? helper;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget field;
+    if (loading) {
+      field = Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: RapidAlertColors.background,
+          border: Border.all(color: RapidAlertColors.cardBorder),
+          borderRadius: BorderRadius.circular(11),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(loadingText, style: const TextStyle(fontSize: 14, color: RapidAlertColors.lightText)),
+            ),
+          ],
+        ),
+      );
+    } else if (error != null) {
+      field = Container(
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF2F2),
+          border: Border.all(color: const Color(0xFFFCA5A5)),
+          borderRadius: BorderRadius.circular(11),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(error!, style: const TextStyle(fontSize: 13, color: RapidAlertColors.linkRed)),
+            ),
+            if (onRetry != null) TextButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
+      );
+    } else {
+      field = DropdownButtonFormField<String>(
+        initialValue: value,
+        isExpanded: true,
+        menuMaxHeight: 360,
+        hint: Text(hint, style: const TextStyle(fontSize: 14)),
+        style: const TextStyle(fontSize: 14, color: RapidAlertColors.darkText),
+        decoration: InputDecoration(
+          prefixIcon: SizedBox(
+            width: 34,
+            child: Center(
+              child: Text(
+                glyph,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: RapidAlertColors.inputIcon),
+              ),
+            ),
+          ),
+          prefixIconConstraints: const BoxConstraints(minWidth: 34),
+        ),
+        items: items.map((item) => DropdownMenuItem(value: item, child: Text(itemLabel?.call(item) ?? item))).toList(),
+        onChanged: enabled ? onChanged : null,
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: RapidAlertColors.labelText),
+          ),
+          const SizedBox(height: 6),
+          field,
+          if (helper != null) ...[
+            const SizedBox(height: 6),
+            Text(helper!, style: const TextStyle(fontSize: 12, color: RapidAlertColors.lightText)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// Show/hide toggle for password fields.
 class PasswordVisibilityToggle extends StatelessWidget {
   const PasswordVisibilityToggle({super.key, required this.obscured, required this.onPressed});

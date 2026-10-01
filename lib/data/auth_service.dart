@@ -103,6 +103,10 @@ class AuthService {
 
   /// Reporter self-registration. Responder accounts are admin-provisioned
   /// only, both on web and mobile.
+  ///
+  /// The home address is identified by PSGC codes ([provinceCode] is empty
+  /// for a city directly under its region, e.g. NCR); [barangay] is the
+  /// display name and is not what the server trusts.
   static Future<UserSession> register({
     required String firstName,
     required String lastName,
@@ -111,6 +115,10 @@ class AuthService {
     required String password,
     required String houseNo,
     required String purok,
+    required String regionCode,
+    required String provinceCode,
+    required String cityCode,
+    required String barangayCode,
     required String barangay,
     String? landmark,
   }) async {
@@ -131,6 +139,10 @@ class AuthService {
               'password_confirmation': password,
               'house_no': houseNo,
               'purok': purok,
+              'region_code': regionCode,
+              'province_code': provinceCode,
+              'city_code': cityCode,
+              'barangay_code': barangayCode,
               'barangay': barangay,
               if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
             }),
