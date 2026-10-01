@@ -23,4 +23,12 @@ class BackendFeatures {
 
   /// /api/responder/resources (Resources).
   static const resources = false;
+
+  /// Reporter tracking details: the incident's own coordinates from
+  /// GET /api/reporter/reports/track (incident pin and road route on the
+  /// reporter's map) and GET /api/reporter/reports/history (Status history).
+  /// Off unless a build passes
+  /// --dart-define=RAPID_ALERT_REPORTER_TRACKING_DETAILS=true, as a local
+  /// build against a backend that has both does.
+  static const reporterTrackingDetails = bool.fromEnvironment('RAPID_ALERT_REPORTER_TRACKING_DETAILS');
 }

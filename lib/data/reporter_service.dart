@@ -43,6 +43,12 @@ abstract class ReporterService {
   /// [trackingId] (any report when null). For display while offline only.
   Future<CachedCopy<TrackedReport>?> cachedTrackedReport({String? trackingId});
 
+  /// One report's lifecycle history from the backend's transition records;
+  /// null when the backend doesn't find it for this caller, and without a
+  /// request while BackendFeatures.reporterTrackingDetails is off. Guests
+  /// must pass the report's [clientReportId]. Throws when the request fails.
+  Future<StatusHistory?> loadStatusHistory({required String trackingId, String? clientReportId});
+
   /// The account's own notifications about one report, newest first.
   /// Signed-in accounts only; the backend has no read/unread state.
   Future<List<ReportNotification>> loadReportNotifications(int reportId);

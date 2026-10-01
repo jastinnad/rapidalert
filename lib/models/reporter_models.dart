@@ -127,6 +127,8 @@ class TrackedReport {
     this.responderLocationUpdatedAt,
     this.etaMinutes,
     this.assignedResponderUserId,
+    this.latitude,
+    this.longitude,
   });
 
   final int id;
@@ -152,6 +154,11 @@ class TrackedReport {
   final DateTime? responderLocationUpdatedAt;
   final int? etaMinutes;
 
+  /// The incident's own GPS position (where help is going). Null when the
+  /// report was sent without GPS or the backend withholds it; never a default.
+  final double? latitude;
+  final double? longitude;
+
   factory TrackedReport.fromApi(Map<String, dynamic> json) {
     return TrackedReport(
       id: (json['id'] as num?)?.toInt() ?? 0,
@@ -171,6 +178,58 @@ class TrackedReport {
           : null,
       etaMinutes: (json['etaMinutes'] as num?)?.toInt(),
       assignedResponderUserId: (json['assignedResponderUserId'] as num?)?.toInt(),
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+    );
+  }
+}
+
+/// One step of a report's lifecycle, from the backend's status-transition
+/// records (`GET /api/reporter/reports/history`).
+class StatusHistoryEntry {
+  const StatusHistoryEntry({
+    required this.fromStatus,
+    required this.toStatus,
+    required this.at,
+    required this.actorRole,
+    required this.actorName,
+  });
+
+  final String? fromStatus;
+  final String toStatus;
+  final DateTime? at;
+
+  /// `dispatcher`, `responder`, … (dispatchers are never named).
+  final String actorRole;
+  final String? actorName;
+
+  factory StatusHistoryEntry.fromApi(Map<String, dynamic> json) {
+    final at = (json['at'] as num?)?.toInt();
+    return StatusHistoryEntry(
+      fromStatus: json['fromStatus']?.toString(),
+      toStatus: json['toStatus']?.toString() ?? '',
+      at: at == null ? null : DateTime.fromMillisecondsSinceEpoch(at),
+      actorRole: json['actorRole']?.toString() ?? '',
+      actorName: json['actorName']?.toString(),
+    );
+  }
+}
+
+class StatusHistory {
+  const StatusHistory({required this.trackingId, required this.submittedAt, required this.transitions});
+
+  final String trackingId;
+  final DateTime? submittedAt;
+  final List<StatusHistoryEntry> transitions;
+
+  factory StatusHistory.fromApi(Map<String, dynamic> json) {
+    final submitted = (json['submittedAt'] as num?)?.toInt();
+    return StatusHistory(
+      trackingId: json['trackingId']?.toString() ?? '',
+      submittedAt: submitted == null ? null : DateTime.fromMillisecondsSinceEpoch(submitted),
+      transitions: (json['transitions'] as List<dynamic>? ?? const [])
+          .map((item) => StatusHistoryEntry.fromApi(item as Map<String, dynamic>))
+          .toList(),
     );
   }
 }

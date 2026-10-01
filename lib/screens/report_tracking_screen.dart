@@ -6,11 +6,14 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../app/theme.dart';
+import '../data/backend_features.dart';
 import '../data/offline_cache.dart';
+import '../data/osrm_route.dart';
 import '../data/report_submission_ids.dart';
 import '../data/reporter_service.dart';
 import '../models/reporter_models.dart';
 import 'report_chat_screen.dart';
+import 'report_history_screen.dart';
 import 'report_notifications_screen.dart';
 import 'ui_components.dart';
 
@@ -205,7 +208,15 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
               const SizedBox(height: 12),
             ],
             if (!_loading && _report != null)
-              _ReportCard(report: _report!, service: widget.service, offline: _offlineSavedAt != null),
+              _ReportCard(
+                report: _report!,
+                service: widget.service,
+                offline: _offlineSavedAt != null,
+                // Guests reach a report's history with this phone's client_report_id.
+                clientReportIdLookup: widget.service.currentUserId == null
+                    ? () => _submissionIds.clientReportIdFor(_report!.trackingId)
+                    : null,
+              ),
           ],
         ),
       ),
@@ -214,11 +225,12 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
 }
 
 class _ReportCard extends StatelessWidget {
-  const _ReportCard({required this.report, required this.service, required this.offline});
+  const _ReportCard({required this.report, required this.service, required this.offline, this.clientReportIdLookup});
 
   final TrackedReport report;
   final ReporterService service;
   final bool offline;
+  final Future<String?> Function()? clientReportIdLookup;
 
   @override
   Widget build(BuildContext context) {
@@ -287,53 +299,119 @@ class _ReportCard extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 8),
-          // The updates list needs an account (the backend keys it by user).
-          if (service.currentUserId != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        ReportNotificationsScreen(service: service, reportId: report.id, trackingId: report.trackingId),
+          if (service.currentUserId != null || BackendFeatures.reporterTrackingDetails)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                // The updates list needs an account (the backend keys it by user).
+                if (service.currentUserId != null)
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ReportNotificationsScreen(
+                          service: service,
+                          reportId: report.id,
+                          trackingId: report.trackingId,
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.notifications_none_rounded, size: 18),
+                    label: const Text('View updates'),
                   ),
-                ),
-                icon: const Icon(Icons.notifications_none_rounded, size: 18),
-                label: const Text('View updates'),
-              ),
-            )
-          else
+                // Needs the history endpoint, which production doesn't have yet.
+                if (BackendFeatures.reporterTrackingDetails)
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ReportHistoryScreen(
+                          service: service,
+                          trackingId: report.trackingId,
+                          clientReportIdLookup: clientReportIdLookup,
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.history_rounded, size: 18),
+                    label: const Text('Status history'),
+                  ),
+              ],
+            ),
+          if (service.currentUserId == null) ...[
+            if (BackendFeatures.reporterTrackingDetails) const SizedBox(height: 6),
             const Text(
               'Sign in to see the list of updates sent about your report.',
               style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
             ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _ResponderTrackingCard extends StatelessWidget {
+/// The responder's position on the reporter's map. While it's live and the
+/// incident has real coordinates, also the incident pin and the OSRM road
+/// route with its ETA; a stale or saved position gets neither.
+class _ResponderTrackingCard extends StatefulWidget {
   const _ResponderTrackingCard({required this.report, required this.offline});
 
   final TrackedReport report;
   final bool offline;
 
+  @override
+  State<_ResponderTrackingCard> createState() => _ResponderTrackingCardState();
+}
+
+class _ResponderTrackingCardState extends State<_ResponderTrackingCard> {
   static const _staleAfter = Duration(seconds: 60);
+
+  /// Re-fetch the road route once the responder has moved this far.
+  static const _rerouteAfterMeters = 100;
+
+  RoadRoute? _route;
+  LatLng? _routedFrom;
+  LatLng? _routedTo;
+  int _routeRequest = 0;
+
+  void _maybeFetchRoute(LatLng from, LatLng to) {
+    final moved = _routedFrom == null || const Distance().distance(_routedFrom!, from) > _rerouteAfterMeters;
+    if (!moved && _routedTo == to) return;
+    final request = ++_routeRequest;
+    _routedFrom = from;
+    _routedTo = to;
+    fetchRoadRouteDetails(from, to).then((route) {
+      if (!mounted || request != _routeRequest) return;
+      setState(() => _route = route);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final report = widget.report;
     final point = LatLng(report.responderLat!, report.responderLng!);
     final updatedAt = report.responderLocationUpdatedAt;
     final age = updatedAt != null ? DateTime.now().difference(updatedAt) : null;
     // A saved copy is never live, however recent its timestamp.
-    final isStale = offline || age == null || age > _staleAfter;
+    final isStale = widget.offline || age == null || age > _staleAfter;
+    // Only used when the backend sends it (BackendFeatures); never a default.
+    final incident = BackendFeatures.reporterTrackingDetails && report.latitude != null && report.longitude != null
+        ? LatLng(report.latitude!, report.longitude!)
+        : null;
+
+    // A route from an old position isn't current, so only while live.
+    final showRoute = !isStale && incident != null;
+    if (showRoute) _maybeFetchRoute(point, incident);
+    final route = showRoute && _routedTo == incident ? _route : null;
+    final roadEta = route?.duration;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Semantics(
-          label: offline ? "Map of the responder's last known position" : "Map of the responder's position",
+          label: [
+            isStale ? "Map of the responder's last known position" : "Map of the responder's position",
+            if (incident != null) 'and your reported location',
+          ].join(' '),
           image: true,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(10),
@@ -341,19 +419,59 @@ class _ResponderTrackingCard extends StatelessWidget {
               height: 180,
               child: IgnorePointer(
                 child: FlutterMap(
-                  options: MapOptions(initialCenter: point, initialZoom: 14),
+                  options: MapOptions(
+                    initialCenter: point,
+                    initialZoom: 14,
+                    initialCameraFit: incident == null
+                        ? null
+                        : CameraFit.bounds(
+                            bounds: LatLngBounds(point, incident),
+                            padding: const EdgeInsets.all(36),
+                            maxZoom: 16,
+                          ),
+                  ),
                   children: [
                     TileLayer(
                       urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'site.rapidalert.app',
                     ),
+                    if (showRoute)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: route?.points ?? [point, incident],
+                            color: RapidAlertColors.enRoute,
+                            strokeWidth: route != null ? 4 : 3,
+                            pattern: route != null
+                                ? const StrokePattern.solid()
+                                : StrokePattern.dashed(segments: const [8, 4]),
+                          ),
+                        ],
+                      ),
                     MarkerLayer(
                       markers: [
+                        if (incident != null)
+                          Marker(
+                            point: incident,
+                            width: 34,
+                            height: 34,
+                            child: const Icon(
+                              Icons.location_on_rounded,
+                              color: RapidAlertColors.emergencyRed,
+                              size: 34,
+                              semanticLabel: 'Your reported location',
+                            ),
+                          ),
                         Marker(
                           point: point,
                           width: 32,
                           height: 32,
-                          child: const Icon(Icons.local_shipping_rounded, color: RapidAlertColors.enRoute, size: 32),
+                          child: Icon(
+                            Icons.local_shipping_rounded,
+                            color: isStale ? RapidAlertColors.lightText : RapidAlertColors.enRoute,
+                            size: 32,
+                            semanticLabel: isStale ? 'Responder last known position' : 'Responder position',
+                          ),
                         ),
                       ],
                     ),
@@ -368,10 +486,14 @@ class _ResponderTrackingCard extends StatelessWidget {
           children: [
             // An ETA worked out from an old position isn't current, so it's
             // only shown while the position is live.
-            if (report.etaMinutes != null && !isStale) ...[
+            if (!isStale && (roadEta != null || report.etaMinutes != null)) ...[
               const Icon(Icons.timer_outlined, size: 16, color: RapidAlertColors.lightText),
               const SizedBox(width: 6),
-              Text('ETA ~${report.etaMinutes} min'),
+              Text(
+                roadEta != null
+                    ? 'ETA about ${(roadEta.inSeconds / 60).ceil()} min by road'
+                    : 'ETA ~${report.etaMinutes} min',
+              ),
               const SizedBox(width: 14),
             ],
             Icon(
@@ -397,11 +519,18 @@ class _ResponderTrackingCard extends StatelessWidget {
             ),
           ],
         ),
-        if (report.etaMinutes != null && isStale) ...[
+        if (isStale && (report.etaMinutes != null || incident != null)) ...[
           const SizedBox(height: 4),
           const Text(
             "ETA unavailable until the responder's position updates.",
             style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+          ),
+        ],
+        if (!isStale && route != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            '${((route.distanceMeters ?? 0) / 1000).toStringAsFixed(1)} km by road · driving estimate without live traffic',
+            style: const TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
           ),
         ],
       ],

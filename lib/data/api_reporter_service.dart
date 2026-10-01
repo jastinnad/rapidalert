@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/reporter_models.dart';
 import '../models/responder_models.dart' show ChatMessage;
+import 'backend_features.dart';
 import 'offline_cache.dart';
 import 'reporter_service.dart';
 
@@ -211,6 +212,25 @@ class ApiReporterService implements ReporterService {
     final report = TrackedReport.fromApi(copy.value);
     if (trackingId != null && trackingId.toUpperCase() != report.trackingId.toUpperCase()) return null;
     return CachedCopy(report, copy.savedAt);
+  }
+
+  @override
+  Future<StatusHistory?> loadStatusHistory({required String trackingId, String? clientReportId}) async {
+    if (!BackendFeatures.reporterTrackingDetails) return null;
+    final uri = Uri.parse('$_baseUrl/api/reporter/reports/history').replace(
+      queryParameters: {
+        'tracking_id': trackingId,
+        if (clientReportId != null && clientReportId.isNotEmpty) 'client_report_id': clientReportId,
+      },
+    );
+    final response = await http.get(uri, headers: _headers).timeout(_readTimeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to load status history: ${response.statusCode}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    return json['found'] == true ? StatusHistory.fromApi(json) : null;
   }
 
   @override
