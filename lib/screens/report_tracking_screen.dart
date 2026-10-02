@@ -23,10 +23,20 @@ import 'ui_components.dart';
 /// (from the backend) while en_route/on_scene.
 const _pollingStatuses = {'reported', 'received', 'assigned', 'en_route', 'on_scene'};
 
+/// Statuses where an assigned responder is still working the report, so
+/// their presence is worth showing.
+const _presenceStatuses = {'assigned', 'en_route', 'on_scene'};
+
+/// The only statuses in which the backend sends the responder's position.
+const _responderMovingStatuses = {'en_route', 'on_scene'};
+
 class ReportTrackingScreen extends StatefulWidget {
-  const ReportTrackingScreen({super.key, required this.service, this.submissionIds});
+  const ReportTrackingScreen({super.key, required this.service, this.submissionIds, this.onCreateAccount});
 
   final ReporterService service;
+
+  /// Opens the existing registration screen; offered to guests only.
+  final VoidCallback? onCreateAccount;
 
   /// Where this install's report IDs are kept; defaults to secure storage.
   final ReportSubmissionIds? submissionIds;
@@ -47,6 +57,10 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
   /// when that copy was fetched. Null while the data is live.
   DateTime? _offlineSavedAt;
   DateTime? _lastLiveAt;
+
+  /// The assigned responder's presence, for signed-in reporters only. Null
+  /// when unknown (not looked up, failed, or no responder), never a guess.
+  ResponderPresence? _presence;
   late final _submissionIds = widget.submissionIds ?? ReportSubmissionIds();
 
   @override
@@ -100,6 +114,7 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
         _lastLiveAt = DateTime.now();
       });
       _syncPollTimer(report);
+      _refreshPresence(report);
     } catch (e) {
       if (!mounted) return;
       final offline = isNetworkError(e);
@@ -121,6 +136,7 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
       _pollTimer?.cancel();
       _pollTimer = null;
       setState(() {
+        _presence = null;
         if (cached != null) {
           _report = cached.value;
           _offlineSavedAt = cached.savedAt;
@@ -134,6 +150,27 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
     } finally {
       if (mounted && !background) setState(() => _loading = false);
     }
+  }
+
+  /// The assigned responder's presence. Guests can't see it (the endpoint
+  /// needs the report owner's account); a failed lookup shows nothing rather
+  /// than claiming the responder is offline.
+  Future<void> _refreshPresence(TrackedReport? report) async {
+    if (report == null ||
+        widget.service.currentUserId == null ||
+        report.assignedResponderUserId == null ||
+        !_presenceStatuses.contains(report.status)) {
+      if (_presence != null) setState(() => _presence = null);
+      return;
+    }
+    ResponderPresence? presence;
+    try {
+      presence = await widget.service.loadResponderPresence(report.id);
+    } catch (_) {
+      presence = null;
+    }
+    if (!mounted || _report?.id != report.id) return;
+    setState(() => _presence = presence);
   }
 
   /// Keeps re-fetching every ~7s until the report is resolved, so status
@@ -212,11 +249,16 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
                 report: _report!,
                 service: widget.service,
                 offline: _offlineSavedAt != null,
+                presence: _presence,
                 // Guests reach a report's history with this phone's client_report_id.
                 clientReportIdLookup: widget.service.currentUserId == null
                     ? () => _submissionIds.clientReportIdFor(_report!.trackingId)
                     : null,
               ),
+            if (!_loading && widget.service.currentUserId == null && widget.onCreateAccount != null) ...[
+              const SizedBox(height: 16),
+              _CreateAccountCard(onCreateAccount: widget.onCreateAccount!),
+            ],
           ],
         ),
       ),
@@ -224,12 +266,61 @@ class _ReportTrackingScreenState extends State<ReportTrackingScreen> {
   }
 }
 
+/// Offered to guests below their tracking card. Honest about what an account
+/// does and doesn't do: reports already sent as a guest aren't moved to it.
+class _CreateAccountCard extends StatelessWidget {
+  const _CreateAccountCard({required this.onCreateAccount});
+
+  final VoidCallback onCreateAccount;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      key: const Key('tracking-create-account'),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Reporting as a guest', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          const Text(
+            'With an account you can message your assigned responder, see their live status, and get updates '
+            'about the reports you send while signed in.',
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            "Reports sent as a guest stay on this phone and aren't added to a new account, so keep your Tracking ID.",
+            style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onCreateAccount,
+              icon: const Icon(Icons.person_add_alt_1_rounded),
+              label: const Text('Create account'),
+              style: FilledButton.styleFrom(backgroundColor: RapidAlertColors.primaryRed),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ReportCard extends StatelessWidget {
-  const _ReportCard({required this.report, required this.service, required this.offline, this.clientReportIdLookup});
+  const _ReportCard({
+    required this.report,
+    required this.service,
+    required this.offline,
+    this.presence,
+    this.clientReportIdLookup,
+  });
 
   final TrackedReport report;
   final ReporterService service;
   final bool offline;
+  final ResponderPresence? presence;
   final Future<String?> Function()? clientReportIdLookup;
 
   @override
@@ -253,35 +344,8 @@ class _ReportCard extends StatelessWidget {
           Text(report.hazard, style: const TextStyle(fontWeight: FontWeight.w700)),
           Text('${report.barangay}, ${report.city}', style: const TextStyle(color: RapidAlertColors.lightText)),
           const SizedBox(height: 10),
-          if (report.assignedResponderName != null) ...[
-            Row(
-              children: [
-                const Icon(Icons.badge_outlined, size: 16, color: RapidAlertColors.lightText),
-                const SizedBox(width: 6),
-                Expanded(child: Text('Responder: ${report.assignedResponderName}')),
-                if (report.assignedResponderUserId != null && service.currentUserId != null)
-                  TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ReportChatScreen(
-                          service: service,
-                          reportId: report.id,
-                          receiverId: report.assignedResponderUserId!,
-                          receiverName: report.assignedResponderName!,
-                        ),
-                      ),
-                    ),
-                    icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
-                    label: const Text('Message'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-          ],
-          if (report.responderLat != null && report.responderLng != null) ...[
-            _ResponderTrackingCard(report: report, offline: offline),
-            const SizedBox(height: 10),
-          ],
+          _ResponderPanel(report: report, service: service, offline: offline, presence: presence),
+          const SizedBox(height: 10),
           Row(
             children: [
               const Icon(Icons.schedule_rounded, size: 16, color: RapidAlertColors.lightText),
@@ -345,6 +409,169 @@ class _ReportCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Who is responding and what can be known about them right now: name and
+/// step from the report, presence from the backend (signed-in only), the
+/// position only when the backend sends one, and whether messaging is open.
+/// Nothing here is guessed; unknown or unavailable says so.
+class _ResponderPanel extends StatelessWidget {
+  const _ResponderPanel({required this.report, required this.service, required this.offline, this.presence});
+
+  final TrackedReport report;
+  final ReporterService service;
+  final bool offline;
+  final ResponderPresence? presence;
+
+  static String _step(String status) => switch (status) {
+    'assigned' => 'Assigned — preparing to respond',
+    'en_route' => 'On the way',
+    'on_scene' => 'Arrived at the location',
+    'resolved' => 'Resolved the report',
+    'completed' => 'Report completed and closed',
+    _ => 'Assigned',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final signedIn = service.currentUserId != null;
+    final hasPosition = report.responderLat != null && report.responderLng != null;
+    final moving = _responderMovingStatuses.contains(report.status);
+    final assigned = report.assignedResponderName != null || report.assignedResponderUserId != null;
+
+    if (!assigned && !hasPosition && !moving) {
+      return const _PanelNote(
+        key: Key('tracking-no-responder'),
+        icon: Icons.hourglass_empty_rounded,
+        text: "No responder assigned yet. You'll see who is coming here once CDRRMO assigns someone.",
+      );
+    }
+
+    // A responder is on the report even if their name didn't come through.
+    final name = report.assignedResponderName ?? 'Assigned responder';
+
+    return Container(
+      key: const Key('tracking-responder-panel'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: RapidAlertColors.background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: RapidAlertColors.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Responder', style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText)),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              const Icon(Icons.badge_outlined, size: 18, color: RapidAlertColors.labelText),
+              const SizedBox(width: 6),
+              Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w700))),
+              if (signedIn && presence != null && !offline)
+                _PresenceDot(key: const Key('tracking-presence'), online: presence!.online),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(_step(report.status), key: const Key('tracking-responder-step')),
+          const SizedBox(height: 10),
+          // Position: only what the backend sends (en route / on scene).
+          if (hasPosition)
+            _ResponderTrackingCard(report: report, offline: offline)
+          else if (moving)
+            const _PanelNote(
+              key: Key('tracking-location-unavailable'),
+              icon: Icons.location_off_outlined,
+              text: "Responder location unavailable. It will appear here once the responder's phone shares it.",
+            )
+          else if (report.status == 'assigned')
+            const _PanelNote(
+              key: Key('tracking-location-not-yet'),
+              icon: Icons.location_searching_rounded,
+              text: "The responder's location is shared once they're on the way.",
+            )
+          else if (report.status == 'resolved' || report.status == 'completed')
+            const _PanelNote(
+              key: Key('tracking-location-ended'),
+              icon: Icons.location_disabled_outlined,
+              text: 'Location sharing ended when the report was resolved.',
+            ),
+          const SizedBox(height: 10),
+          // Chat: report-bound, between the report owner and the assigned responder.
+          if (signedIn && report.assignedResponderUserId != null)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                key: const Key('tracking-message-responder'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ReportChatScreen(
+                      service: service,
+                      reportId: report.id,
+                      trackingId: report.trackingId,
+                      receiverId: report.assignedResponderUserId!,
+                      receiverName: name,
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+                label: Text('Message $name'),
+              ),
+            )
+          else if (!signedIn)
+            const _PanelNote(
+              key: Key('tracking-chat-needs-account'),
+              icon: Icons.lock_outline_rounded,
+              text: 'Messaging the responder is available for reports sent while signed in.',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The backend's presence flag, said as plainly as it is known: online now,
+/// or not online right now. (No "last seen": the backend has no such value.)
+class _PresenceDot extends StatelessWidget {
+  const _PresenceDot({super.key, required this.online});
+
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = online ? RapidAlertColors.success : RapidAlertColors.lightText;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.circle, size: 10, color: color),
+        const SizedBox(width: 4),
+        Text(
+          online ? 'Online' : 'Not online right now',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color),
+        ),
+      ],
+    );
+  }
+}
+
+class _PanelNote extends StatelessWidget {
+  const _PanelNote({super.key, required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: RapidAlertColors.lightText),
+        const SizedBox(width: 6),
+        Expanded(child: Text(text, style: const TextStyle(fontSize: 13, color: RapidAlertColors.labelText))),
+      ],
     );
   }
 }

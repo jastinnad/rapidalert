@@ -292,13 +292,18 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
   /// — and again once a fallback straight line upgrades to the real route —
   /// so switching centers doesn't leave the view zoomed into a shared local
   /// road segment that looks identical regardless of which center is picked.
-  void _fitRouteOnce(EvacuationCenter target, List<LatLng>? roadRoute) {
+  void _fitRouteOnce(EvacuationCenter target, List<LatLng>? roadRoute, List<EvacuationCenter> centres) {
     final hasRoute = roadRoute != null;
     if (_lastFitAreaId == target.areaId && _lastFitHadRoute == hasRoute) return;
     _lastFitAreaId = target.areaId;
     _lastFitHadRoute = hasRoute;
 
-    final points = roadRoute ?? [_position, LatLng(target.lat, target.lon)];
+    // The route plus every listed center, so no ranked pin starts off-screen.
+    final points = [
+      ...?roadRoute,
+      if (roadRoute == null) ...[_position, LatLng(target.lat, target.lon)],
+      for (final c in centres) LatLng(c.lat, c.lon),
+    ];
     void fit() {
       if (!mounted) return;
       _mapController.fitCamera(
@@ -320,6 +325,20 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
 
   bool _mapSized = false;
   VoidCallback? _pendingFit;
+
+  /// Shows every listed center (and the user, when their position is real).
+  void _fitAll(List<EvacuationCenter> centres) {
+    if (!_mapReady) return;
+    final points = [for (final c in centres) LatLng(c.lat, c.lon), if (_locationKnown) _position];
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      _mapController.move(points.single, 15);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.coordinates(coordinates: points, padding: const EdgeInsets.fromLTRB(32, 72, 32, 32)),
+    );
+  }
 
   void _onMapEvent(MapEvent event) {
     if (_mapSized || event is! MapEventNonRotatedSizeChange) return;
@@ -374,112 +393,136 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     final routeColor = routeTarget != null ? _parseHexColor(routeTarget.statusColor) : RapidAlertColors.dispatchBlue;
     final roadRoute = routeTarget != null && _routedAreaId == routeTarget.areaId ? _routePoints : null;
     if (showRoute) {
-      _fitRouteOnce(routeTarget, roadRoute);
+      _fitRouteOnce(routeTarget, roadRoute, centres);
     }
 
-    return Column(
-      children: [
-        if (_offlineSavedAt != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: OfflineBanner(
-              savedAt: _offlineSavedAt!,
-              onRetry: _acquireLocationAndLoad,
-              detail: 'Free slots and distances may have changed.',
-            ),
-          ),
-        if (result?.warning != null) _banner(result!.warning!, RapidAlertColors.warning),
-        if (_positionBanner != null)
-          _banner(_positionBanner!, RapidAlertColors.lightText, action: TextButton(
-            onPressed: _acquireLocationAndLoad,
-            child: const Text('Retry'),
-          )),
-        if (_rerouteBanner != null) _banner(_rerouteBanner!, RapidAlertColors.primaryRed),
-        SizedBox(
-          height: 260,
-          child: FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _position,
-              initialZoom: 13,
-              onMapReady: () => _mapReady = true,
-              onMapEvent: _onMapEvent,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'site.rapidalert.app',
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          if (_offlineSavedAt != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: OfflineBanner(
+                savedAt: _offlineSavedAt!,
+                onRetry: _acquireLocationAndLoad,
+                detail: 'Free slots and distances may have changed.',
               ),
-              if (showRoute)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: roadRoute ?? [_position, LatLng(routeTarget.lat, routeTarget.lon)],
-                      color: routeColor,
-                      strokeWidth: roadRoute != null ? 4 : 3,
-                      pattern: roadRoute != null
-                          ? const StrokePattern.solid()
-                          : StrokePattern.dashed(segments: const [10, 6]),
+            ),
+          if (result?.warning != null) _banner(result!.warning!, RapidAlertColors.warning),
+          if (_positionBanner != null)
+            _banner(_positionBanner!, RapidAlertColors.lightText, action: TextButton(
+              onPressed: _acquireLocationAndLoad,
+              child: const Text('Retry'),
+            )),
+          if (_rerouteBanner != null) _banner(_rerouteBanner!, RapidAlertColors.primaryRed),
+          // The map leads: about half the screen, while the ranked list below
+          // keeps room for at least one full card.
+          SizedBox(
+            key: const Key('evacuation-map'),
+            height: (constraints.maxHeight * 0.5).clamp(240.0, 520.0),
+            child: Stack(
+              children: [
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _position,
+                    initialZoom: 13,
+                    onMapReady: () => _mapReady = true,
+                    onMapEvent: _onMapEvent,
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'site.rapidalert.app',
+                    ),
+                    if (showRoute)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: roadRoute ?? [_position, LatLng(routeTarget.lat, routeTarget.lon)],
+                            color: routeColor,
+                            strokeWidth: roadRoute != null ? 4 : 3,
+                            pattern: roadRoute != null
+                                ? const StrokePattern.solid()
+                                : StrokePattern.dashed(segments: const [10, 6]),
+                          ),
+                        ],
+                      ),
+                    MarkerLayer(
+                      markers: [
+                        if (_locationKnown)
+                          Marker(
+                            point: _position,
+                            width: 24,
+                            height: 24,
+                            child: const Icon(
+                              Icons.my_location_rounded,
+                              color: RapidAlertColors.dispatchBlue,
+                              semanticLabel: 'Your location',
+                            ),
+                          ),
+                        for (final (index, c) in centres.indexed)
+                          Marker(
+                            point: LatLng(c.lat, c.lon),
+                            width: 96,
+                            height: 58,
+                            // The pin's tip sits on the point; the label is above it.
+                            alignment: Alignment.topCenter,
+                            child: _CenterMarker(center: c, rank: index + 1, color: _parseHexColor(c.statusColor)),
+                          ),
+                      ],
                     ),
                   ],
                 ),
-              MarkerLayer(
-                markers: [
-                  if (_locationKnown)
-                    Marker(
-                      point: _position,
-                      width: 24,
-                      height: 24,
-                      child: const Icon(
-                        Icons.my_location_rounded,
-                        color: RapidAlertColors.dispatchBlue,
-                        semanticLabel: 'Your location',
+                if (centres.isNotEmpty)
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Material(
+                      color: Colors.white,
+                      shape: const CircleBorder(),
+                      elevation: 3,
+                      child: IconButton(
+                        key: const Key('evacuation-show-all'),
+                        tooltip: 'Show all centers',
+                        icon: const Icon(Icons.zoom_out_map_rounded, color: RapidAlertColors.darkText),
+                        onPressed: () => _fitAll(centres),
                       ),
                     ),
-                  ...centres.map(
-                    (c) => Marker(
-                      point: LatLng(c.lat, c.lon),
-                      width: 96,
-                      height: 58,
-                      // The pin's tip sits on the point; the label is above it.
-                      alignment: Alignment.topCenter,
-                      child: _CenterMarker(center: c, color: _parseHexColor(c.statusColor)),
-                    ),
                   ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: _acquireLocationAndLoad,
-            child: centres.isEmpty
-                ? ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    children: const [
-                      Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text(
-                          'No evacuation centers are currently available near you. Contact local authorities for guidance.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: RapidAlertColors.lightText),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _acquireLocationAndLoad,
+              child: centres.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'No evacuation centers are currently available near you. Contact local authorities for guidance.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: RapidAlertColors.lightText),
+                          ),
                         ),
-                      ),
-                    ],
-                  )
-                : ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    // Extra bottom space so the preparedness button never
-                    // covers the last center's Get Directions button.
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                    itemCount: centres.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) => _centerCard(centres[index]),
-                  ),
+                      ],
+                    )
+                  : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      // Extra bottom space so the preparedness button never
+                      // covers the last center's Get Directions button.
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                      itemCount: centres.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (context, index) => _centerCard(centres[index], rank: index + 1),
+                    ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -497,16 +540,32 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
     );
   }
 
-  Widget _centerCard(EvacuationCenter center) {
+  Widget _centerCard(EvacuationCenter center, {required int rank}) {
     final isSelected = _selectedAreaId == center.areaId;
     final statusColor = _parseHexColor(center.statusColor);
 
     return GlassCard(
+      key: Key('evacuation-card-${center.areaId}'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (rank == 1) ...[
+            const Text(
+              'TOP RECOMMENDATION · nearest with space',
+              key: Key('evacuation-top-pick'),
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: RapidAlertColors.success, letterSpacing: 0.4),
+            ),
+            const SizedBox(height: 6),
+          ],
           Row(
             children: [
+              // Same number as the center's map pin.
+              CircleAvatar(
+                radius: 12,
+                backgroundColor: statusColor.withValues(alpha: 0.16),
+                child: Text('$rank', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: statusColor)),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(center.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
               ),
@@ -585,9 +644,12 @@ class _EvacuationCentersScreenState extends State<EvacuationCentersScreen> {
 /// A map pin in the center's capacity colour with a short text label, so
 /// the status doesn't rely on colour alone.
 class _CenterMarker extends StatelessWidget {
-  const _CenterMarker({required this.center, required this.color});
+  const _CenterMarker({required this.center, required this.rank, required this.color});
 
   final EvacuationCenter center;
+
+  /// The center's place in the ranked list, shown on the pin and its card.
+  final int rank;
   final Color color;
 
   /// Short forms of CapacityStatusResolver::LABELS for the map (the demo
@@ -603,7 +665,7 @@ class _CenterMarker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: '${center.name}, ${center.statusLabel}',
+      label: '$rank. ${center.name}, ${center.statusLabel}',
       child: Tooltip(
         message: '${center.name}\n${center.statusLabel}',
         child: Column(
@@ -617,7 +679,7 @@ class _CenterMarker extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                _shortLabel,
+                '$rank · $_shortLabel',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: _darken(color)),

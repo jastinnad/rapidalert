@@ -17,10 +17,31 @@ class IncidentReport {
     required this.reporterLat,
     required this.reporterLng,
     this.reporterUserId,
+    this.trackingId = '',
+    this.city = '',
+    this.particular = '',
+    this.particularDetail = '',
+    this.currentSituation = const [],
+    this.needs = const [],
+    this.pregnantCount = 0,
+    this.elderlyCount = 0,
+    this.childCount = 0,
+    this.pwdCount = 0,
+    this.purok = '',
+    this.houseNo = '',
+    this.landmark = '',
+    this.phone = '',
+    this.alternateContact = '',
+    this.imageUrl = '',
+    this.reportedAt,
+    this.reporterOnline,
   });
 
+  /// The backend's numeric report id (used in API calls).
   final String id;
   final String hazard;
+
+  /// Barangay, or the city when the barangay is missing.
   final String location;
   final String reporterName;
   final ReportStatus status;
@@ -31,9 +52,41 @@ class IncidentReport {
   final double? reporterLat;
   final double? reporterLng;
 
-  /// Who to message — null until the backend's reports-list endpoint is
-  /// wired up for this project (a separate, pre-existing gap).
+  /// Who to message; null for a guest's report (no account, no inbox).
   final int? reporterUserId;
+
+  /// The Tracking ID the reporter sees (e.g. RA-20260930-ABC123); empty
+  /// when the backend didn't send one.
+  final String trackingId;
+  final String city;
+
+  /// Report details the backend shares with the assigned responder (the
+  /// same ones the website's responder queue shows). Empty when not given.
+  final String particular;
+  final String particularDetail;
+  final List<String> currentSituation;
+  final List<String> needs;
+  final int pregnantCount;
+  final int elderlyCount;
+  final int childCount;
+  final int pwdCount;
+  final String purok;
+  final String houseNo;
+  final String landmark;
+  final String phone;
+  final String alternateContact;
+  final String imageUrl;
+  final DateTime? reportedAt;
+
+  /// The backend's presence flag for the reporter's account: true/false from
+  /// its 10-minute online marker, null when unknown (guest report, or not
+  /// sent). Never guessed from timestamps.
+  final bool? reporterOnline;
+
+  bool get isGuestReport => reporterUserId == null;
+
+  /// What to show people: the Tracking ID, or the report id when missing.
+  String get displayId => trackingId.isNotEmpty ? trackingId : id;
 
   IncidentReport copyWith({
     ReportStatus? status,
@@ -51,8 +104,37 @@ class IncidentReport {
       reporterLat: reporterLat,
       reporterLng: reporterLng,
       reporterUserId: reporterUserId,
+      trackingId: trackingId,
+      city: city,
+      particular: particular,
+      particularDetail: particularDetail,
+      currentSituation: currentSituation,
+      needs: needs,
+      pregnantCount: pregnantCount,
+      elderlyCount: elderlyCount,
+      childCount: childCount,
+      pwdCount: pwdCount,
+      purok: purok,
+      houseNo: houseNo,
+      landmark: landmark,
+      phone: phone,
+      alternateContact: alternateContact,
+      imageUrl: imageUrl,
+      reportedAt: reportedAt,
+      reporterOnline: reporterOnline,
     );
   }
+}
+
+/// The one forward step a responder can take from a status, matching the
+/// backend's StatusMachine; `resolved`/`completed` have none.
+(String, ReportStatus)? responderNextStep(ReportStatus status) {
+  return switch (status) {
+    ReportStatus.assigned => ('Start — En Route', ReportStatus.enRoute),
+    ReportStatus.enRoute => ('Arrived — On Scene', ReportStatus.onScene),
+    ReportStatus.onScene => ('Mark Resolved', ReportStatus.resolved),
+    ReportStatus.resolved || ReportStatus.completed => null,
+  };
 }
 
 class CoordinationEvent {

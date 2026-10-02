@@ -180,7 +180,8 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: MapTrackingScreen(service: _NoFixResponderService()))));
     await tester.pump();
 
-    expect(find.textContaining('Waiting for your GPS position'), findsOneWidget);
+    // Assigned, not yet en route: GPS isn't in use yet, so nothing is "waited for".
+    expect(find.textContaining('shown here once you tap Start — En Route'), findsOneWidget);
     expect(find.byIcon(Icons.local_shipping_rounded), findsNothing);
     expect(find.textContaining('km'), findsNothing);
   });

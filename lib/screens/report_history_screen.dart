@@ -116,6 +116,9 @@ class _ReportHistoryScreenState extends State<ReportHistoryScreen> {
 
   static String _title(String status) => switch (status) {
     'reported' => 'Waiting for a responder',
+    'received' => 'Received',
+    'validating' => 'Being validated',
+    'incomplete' => 'Marked incomplete',
     'assigned' => 'Responder assigned',
     'en_route' => 'Responder on the way',
     'on_scene' => 'Responder arrived',

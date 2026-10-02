@@ -64,7 +64,6 @@ class ApiResponderService implements ResponderService {
 
   /// Null until the first real GPS fix; never a made-up position.
   GeoPoint? _responderPoint;
-  String? _activeReportId;
   List<ActiveTrackingAssignment> _activeTrackingAssignments = const [];
 
   @override
@@ -102,7 +101,6 @@ class ApiResponderService implements ResponderService {
 
   @override
   List<ChatMessage> messagesFor(String reportId) {
-    _activeReportId = reportId;
     return _chatMessages.where((m) => m.reportId == reportId).toList()
       ..sort((a, b) => a.time.compareTo(b.time));
   }
@@ -345,11 +343,10 @@ class ApiResponderService implements ResponderService {
       _refreshReports();
     });
 
+    // The open chat is refreshed by ChatScreen itself while it is shown, so
+    // a failed refresh can be reported there instead of being swallowed here.
     _eventsPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _refreshEvents();
-      if (_activeReportId != null) {
-        _refreshMessages(_activeReportId!);
-      }
     });
 
     await _refreshActiveTracking();
@@ -421,10 +418,6 @@ class ApiResponderService implements ResponderService {
     _reportsController.add(List.unmodifiable(_reports));
     _setReportListStatus(ReportListStatus(lastLoadedAt: DateTime.now()));
     _announceNewAssignments();
-
-    if (_activeReportId != null) {
-      await _refreshMessages(_activeReportId!);
-    }
   }
 
   void _setReportListStatus(ReportListStatus status) {
@@ -511,7 +504,6 @@ class ApiResponderService implements ResponderService {
 
   @override
   Future<void> loadMessages(String reportId) async {
-    _activeReportId = reportId;
     final endpoint = Uri.parse(
       '$_baseUrl/api/reports/messages',
     ).replace(queryParameters: {'report_id': reportId});
@@ -766,8 +758,35 @@ class ApiResponderService implements ResponderService {
       reporterLat: _toDouble(item['latitude']),
       reporterLng: _toDouble(item['longitude']),
       reporterUserId: (item['reporterUserId'] as num?)?.toInt(),
+      trackingId: trackingId,
+      city: _text(item['city']),
+      particular: _text(item['particular']),
+      particularDetail: _text(item['particularDetail']),
+      currentSituation: _textList(item['currentSituation']),
+      needs: _textList(item['needs']),
+      pregnantCount: (item['pregnantCount'] as num?)?.toInt() ?? 0,
+      elderlyCount: (item['elderlyCount'] as num?)?.toInt() ?? 0,
+      childCount: (item['childCount'] as num?)?.toInt() ?? 0,
+      pwdCount: (item['pwdCount'] as num?)?.toInt() ?? 0,
+      purok: _text(item['purok']),
+      houseNo: _text(item['houseNo']),
+      landmark: _text(item['landmark']),
+      phone: _text(item['phone']),
+      alternateContact: _text(item['alternateContact']),
+      imageUrl: _text(item['imageUrl']),
+      reportedAt: item['createdAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch((item['createdAt'] as num).toInt())
+          : null,
+      // Only the backend's own flag; absent means unknown, not offline.
+      reporterOnline: item['reporterOnline'] is bool ? item['reporterOnline'] as bool : null,
     );
   }
+
+  static String _text(Object? value) => value?.toString().trim() ?? '';
+
+  static List<String> _textList(Object? value) => value is List
+      ? [for (final v in value) if (v != null && v.toString().trim().isNotEmpty) v.toString().trim()]
+      : const [];
 
   CoordinationEvent _eventFromApi(Map<String, dynamic> item) {
     return CoordinationEvent(

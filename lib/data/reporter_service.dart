@@ -35,6 +35,10 @@ abstract class ReporterService {
     String? clientReportId,
     /// Required by the backend when submitting without an account.
     String? phone,
+    /// Optional guest contact details, as on the website's report form.
+    String? alternateContact,
+    String? reporterName,
+    String? reporterEmail,
   });
 
   Future<TrackedReport?> trackReport({String? trackingId, String? clientReportId});
@@ -52,6 +56,11 @@ abstract class ReporterService {
   /// The account's own notifications about one report, newest first.
   /// Signed-in accounts only; the backend has no read/unread state.
   Future<List<ReportNotification>> loadReportNotifications(int reportId);
+
+  /// Whether the responder assigned to one of the account's reports is
+  /// online, per the backend's presence flag. Signed-in accounts only; null
+  /// when no responder is assigned.
+  Future<ResponderPresence?> loadResponderPresence(int reportId);
 
   /// Whether a report of the caller's is already stored under
   /// [clientReportId]. Read-only. Throws [ReportSubmitException] when the

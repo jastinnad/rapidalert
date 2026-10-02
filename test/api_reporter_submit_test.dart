@@ -223,4 +223,48 @@ void main() {
       expect(reportSubmitErrorMessage(const ReportSubmitException(statusCode: 409)), contains('new report'));
     });
   });
+
+  test('guest contact details go out under the website field names, and are left out when empty', () async {
+    final sent = <Map<String, String>>[];
+    final client = MockClient((request) async {
+      sent.add(multipartFields(request));
+      return http.Response(jsonEncode({'tracking_id': 'RA-1', 'duplicate': false, 'message': 'ok'}), 200);
+    });
+
+    await http.runWithClient(() async {
+      await service.submitReport(
+        hazardType: 'Flood',
+        particular: 'Flood depth',
+        particularColor: 'orange',
+        particularDetail: 'Knee-to-waist deep, rising',
+        region: 'Region IV-A',
+        province: 'Batangas',
+        city: 'Lipa City',
+        barangay: 'Banaybanay',
+        purok: '1',
+        houseNo: '10',
+        clientReportId: 'id-with-contacts',
+        phone: '09171234567',
+        alternateContact: '09187654321',
+        reporterName: 'Vera Fyre',
+        reporterEmail: 'vera@example.com',
+      );
+      await submit(service, 'id-without-contacts');
+    }, () => client);
+
+    expect(sent[0], containsPair('alternate_contact', '09187654321'));
+    expect(sent[0], containsPair('reporter_name', 'Vera Fyre'));
+    expect(sent[0], containsPair('reporter_email', 'vera@example.com'));
+    expect(sent[0], containsPair('phone', '09171234567'));
+    expect(sent[0], containsPair('client_report_id', 'id-with-contacts'));
+
+    // Without them the request is exactly what it was before.
+    expect(sent[1].keys, isNot(contains('alternate_contact')));
+    expect(sent[1].keys, isNot(contains('reporter_name')));
+    expect(sent[1].keys, isNot(contains('reporter_email')));
+    expect(sent[1].keys.toSet(), {
+      'hazard_type', 'particular', 'particular_color', 'particular_detail', 'region', 'province', 'city', 'barangay',
+      'purok', 'house_no', 'pregnant_count', 'elderly_count', 'child_count', 'pwd_count', 'client_report_id', 'phone',
+    });
+  });
 }

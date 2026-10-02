@@ -7,9 +7,13 @@ import '../models/responder_models.dart';
 import 'ui_components.dart';
 
 class AssignedReportsScreen extends StatefulWidget {
-  const AssignedReportsScreen({super.key, required this.service});
+  const AssignedReportsScreen({super.key, required this.service, this.onOpenMap});
 
   final ResponderService service;
+
+  /// Opens the Map tab on a report (its location and full details). Called
+  /// after Start — En Route succeeds, and from each report's map button.
+  final ValueChanged<String>? onOpenMap;
 
   @override
   State<AssignedReportsScreen> createState() => _AssignedReportsScreenState();
@@ -24,6 +28,8 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
     setState(() => _updatingReportId = report.id);
     try {
       await widget.service.updateReportStatus(report.id, nextStatus);
+      // Only once the backend accepted it: the responder is now on the way.
+      if (mounted && nextStatus == ReportStatus.enRoute) widget.onOpenMap?.call(report.id);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -88,7 +94,7 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
                         ...ReportStatus.values.map(
                           (status) => DropdownMenuItem<ReportStatus?>(
                             value: status,
-                            child: Text(_reportStatusLabel(status)),
+                            child: Text(reportStatusLabel(status)),
                           ),
                         ),
                       ],
@@ -134,7 +140,8 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                report.id,
+                                report.displayId,
+                                key: Key('report-title-${report.id}'),
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,
@@ -157,24 +164,35 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: RapidAlertColors.lightText),
                         ),
-                        if (_nextStep(report.status) != null) ...[
+                        if (responderNextStep(report.status) != null) ...[
                           const SizedBox(height: 10),
                           SizedBox(
                             width: double.infinity,
                             child: FilledButton(
+                              key: Key('report-next-step-${report.id}'),
                               onPressed: _updatingReportId == report.id
                                   ? null
-                                  : () => _advanceStatus(report, _nextStep(report.status)!.$2),
+                                  : () => _advanceStatus(report, responderNextStep(report.status)!.$2),
                               child: _updatingReportId == report.id
                                   ? const SizedBox(
                                       width: 18,
                                       height: 18,
                                       child: CircularProgressIndicator(strokeWidth: 2),
                                     )
-                                  : Text(_nextStep(report.status)!.$1),
+                                  : Text(responderNextStep(report.status)!.$1),
                             ),
                           ),
                         ],
+                        if (widget.onOpenMap != null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: Key('report-open-map-${report.id}'),
+                              onPressed: () => widget.onOpenMap!(report.id),
+                              icon: const Icon(Icons.map_rounded, size: 18),
+                              label: const Text('Map & details'),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -187,19 +205,8 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
     );
   }
 
-  /// The one forward transition available from a status, matching the
-  /// backend's real StatusMachine — `resolved`/`completed` have none.
-  (String, ReportStatus)? _nextStep(ReportStatus status) {
-    return switch (status) {
-      ReportStatus.assigned => ('Start — En Route', ReportStatus.enRoute),
-      ReportStatus.enRoute => ('Arrived — On Scene', ReportStatus.onScene),
-      ReportStatus.onScene => ('Mark Resolved', ReportStatus.resolved),
-      ReportStatus.resolved || ReportStatus.completed => null,
-    };
-  }
-
   Widget _statusChip(ReportStatus status, bool needHelp) {
-    final color = needHelp ? RapidAlertColors.warning : _statusColor(status);
+    final color = needHelp ? RapidAlertColors.warning : reportStatusColor(status);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -208,7 +215,7 @@ class _AssignedReportsScreenState extends State<AssignedReportsScreen> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
-        needHelp ? 'Need Help' : _reportStatusLabel(status),
+        needHelp ? 'Need Help' : reportStatusLabel(status),
         style: TextStyle(color: color, fontWeight: FontWeight.w600),
       ),
     );
@@ -253,7 +260,7 @@ class _RefreshFailedBanner extends StatelessWidget {
   }
 }
 
-Color _statusColor(ReportStatus status) {
+Color reportStatusColor(ReportStatus status) {
   return switch (status) {
     ReportStatus.assigned => RapidAlertColors.statusAssigned,
     ReportStatus.enRoute => RapidAlertColors.enRoute,
@@ -263,7 +270,7 @@ Color _statusColor(ReportStatus status) {
   };
 }
 
-String _reportStatusLabel(ReportStatus status) {
+String reportStatusLabel(ReportStatus status) {
   return switch (status) {
     ReportStatus.assigned => 'Assigned',
     ReportStatus.enRoute => 'En Route',

@@ -235,6 +235,22 @@ class StatusHistory {
 }
 
 /// One row of `GET /api/reports/notifications` (IncidentNotification).
+/// The assigned responder's presence, from GET /api/reports/responder-presence
+/// (report owner only). [online] is the backend's own flag: set at sign-in and
+/// kept fresh by recent activity, for about 10 minutes.
+class ResponderPresence {
+  const ResponderPresence({required this.online});
+
+  final bool online;
+
+  /// Null when no responder is assigned (`assignedResponder: null`).
+  static ResponderPresence? fromApi(Map<String, dynamic> json) {
+    final responder = json['assignedResponder'];
+    if (responder is! Map<String, dynamic>) return null;
+    return ResponderPresence(online: responder['online'] == true);
+  }
+}
+
 class ReportNotification {
   const ReportNotification({required this.id, required this.message, required this.status, required this.createdAt});
 
@@ -389,10 +405,23 @@ class EvacuationRankedResult {
   final String? warning;
   final DateTime? cachedAt;
 
+  /// A center can only be mapped and routed to with a real position: one
+  /// sent without coordinates (or at 0,0, how a missing point used to be
+  /// stored) is left out rather than drawn somewhere made up.
+  static bool _hasRealPosition(Map<String, dynamic> json) {
+    final lat = json['lat'];
+    final lon = json['lon'];
+    if (lat is! num || lon is! num) return false;
+    if (lat == 0 && lon == 0) return false;
+    return lat.abs() <= 90 && lon.abs() <= 180;
+  }
+
   factory EvacuationRankedResult.fromApi(Map<String, dynamic> json) {
     return EvacuationRankedResult(
       centres: (json['centres'] as List<dynamic>? ?? const [])
-          .map((c) => EvacuationCenter.fromApi(c as Map<String, dynamic>))
+          .cast<Map<String, dynamic>>()
+          .where(_hasRealPosition)
+          .map(EvacuationCenter.fromApi)
           .toList(),
       impassableMunicipalities: (json['impassable_municipalities'] as List<dynamic>? ?? const [])
           .map((m) => m.toString())

@@ -14,10 +14,13 @@ import 'settings_screen.dart';
 import 'ui_components.dart';
 
 class ReporterHomeShell extends StatefulWidget {
-  const ReporterHomeShell({super.key, this.session, this.onLogout, this.isGuest = false});
+  const ReporterHomeShell({super.key, this.session, this.onLogout, this.isGuest = false, this.onCreateAccount});
 
   final UserSession? session;
   final VoidCallback? onLogout;
+
+  /// Guests only: opens the existing registration screen.
+  final VoidCallback? onCreateAccount;
 
   /// True when reached via "Report a hazard without an account" — no
   /// session, no account-bound features (check-in, profile). Reports are
@@ -53,7 +56,7 @@ class _ReporterHomeShellState extends State<ReporterHomeShell> {
               onOpenTracking: () => setState(() => _index = 1),
               onOpenEvacuation: () => setState(() => _index = 2),
             ),
-            ReportTrackingScreen(service: _service),
+            ReportTrackingScreen(service: _service, onCreateAccount: widget.onCreateAccount),
             EvacuationCentersScreen(service: _service, active: _index == 2),
           ]
         : [

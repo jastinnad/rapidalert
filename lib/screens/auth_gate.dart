@@ -131,7 +131,12 @@ class _AuthGateState extends State<AuthGate> {
 
       if (_authView == _AuthView.guest) {
         return returnsToLogin(
-          ReporterHomeShell(session: null, isGuest: true, onLogout: backToLogin),
+          ReporterHomeShell(
+            session: null,
+            isGuest: true,
+            onLogout: backToLogin,
+            onCreateAccount: () => setState(() => _authView = _AuthView.register),
+          ),
         );
       }
 

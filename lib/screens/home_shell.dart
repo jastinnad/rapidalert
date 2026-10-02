@@ -32,10 +32,25 @@ class _HomeShellState extends State<HomeShell> {
   StreamSubscription<AssignmentAlert>? _alertSub;
   int _index = 0;
 
-  /// The report the Map tab should show, set by an assignment alert's View.
+  /// The report the Map tab should show, set by an assignment alert's View
+  /// or by Start — En Route on the Reports tab.
   String? _mapReportId;
 
+  /// The report the Chat tab should open on, set from the map's Message button.
+  String? _chatReportId;
+
   static const _mapTab = 2;
+  static const _chatTab = 3;
+
+  void _openMap(String reportId) => setState(() {
+    _mapReportId = reportId;
+    _index = _mapTab;
+  });
+
+  void _openChat(String reportId) => setState(() {
+    _chatReportId = reportId;
+    _index = _chatTab;
+  });
 
   @override
   void initState() {
@@ -76,10 +91,7 @@ class _HomeShellState extends State<HomeShell> {
           FilledButton(
             onPressed: () {
               messenger.hideCurrentMaterialBanner();
-              setState(() {
-                _mapReportId = alert.reportId;
-                _index = _mapTab;
-              });
+              _openMap(alert.reportId);
             },
             child: const Text('View'),
           ),
@@ -95,9 +107,9 @@ class _HomeShellState extends State<HomeShell> {
         service: _service,
         onNavigateToTab: (index) => setState(() => _index = index),
       ),
-      AssignedReportsScreen(service: _service),
-      MapTrackingScreen(service: _service, initialReportId: _mapReportId),
-      ChatScreen(service: _service),
+      AssignedReportsScreen(service: _service, onOpenMap: _openMap),
+      MapTrackingScreen(service: _service, initialReportId: _mapReportId, onOpenChat: _openChat),
+      ChatScreen(service: _service, initialReportId: _chatReportId),
       CoordinationScreen(service: _service),
     ];
 
@@ -141,10 +153,11 @@ class _HomeShellState extends State<HomeShell> {
           top: false,
           child: BottomNavigationBar(
             currentIndex: _index,
-            // A normal tab switch opens the map on its default report again.
+            // A normal tab switch opens the map and chat on their default report again.
             onTap: (value) => setState(() {
               _index = value;
               _mapReportId = null;
+              _chatReportId = null;
             }),
             backgroundColor: Colors.white,
             selectedItemColor: RapidAlertColors.primaryRed,

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -70,6 +71,31 @@ String reportSubmitErrorMessage(Object error) {
   };
 }
 
+/// The website's severity legend (report.blade.php "LEGEND (COLORS)").
+const severityLabels = {'green': 'GREEN — GOOD', 'orange': 'ORANGE — MODERATE', 'red': 'RED — CRITICAL'};
+
+/// The website's consent notice, shown with the Submit button.
+const reportConsentNotice =
+    'I hereby give my consent to the owner of this website to collect, use, and process my personal information '
+    'for the purpose of emergency monitoring. The collected information will be retained for two (2) weeks only '
+    'and will be handled in accordance with applicable data protection policies.';
+
+/// The emergency photo limit: the website's "Max 5MB" and the server's
+/// `emergency_image` rule (image, max:5120).
+const emergencyPhotoMaxBytes = 5 * 1024 * 1024;
+
+String? emergencyPhotoSizeError(int bytes) => bytes > emergencyPhotoMaxBytes
+    ? 'This photo is larger than 5 MB. Choose a smaller photo (JPG, PNG, GIF or WEBP, max 5 MB).'
+    : null;
+
+/// The website's contact-number rule (maxlength 11, digits only, pattern
+/// \d{11}) and the server's regex /^[0-9]{11}$/.
+bool isValidContactNumber(String value) => RegExp(r'^\d{11}$').hasMatch(value);
+
+final _contactNumberFormatters = [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(11)];
+
+bool _isValidEmail(String value) => RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value);
+
 class ReportSubmitScreen extends StatefulWidget {
   const ReportSubmitScreen({
     super.key,
@@ -120,6 +146,10 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
   final _houseNoController = TextEditingController();
   final _landmarkController = TextEditingController();
   final _phoneController = TextEditingController();
+  // The website's other (optional) Personal Information fields for guests.
+  final _alternateContactController = TextEditingController();
+  final _reporterNameController = TextEditingController();
+  final _reporterEmailController = TextEditingController();
   final _regionController = TextEditingController(text: 'Region IV-A');
   final _provinceController = TextEditingController(text: 'Batangas');
   final _cityController = TextEditingController(text: 'Lipa City');
@@ -135,6 +165,7 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
   bool _capturingLocation = false;
 
   XFile? _pickedImage;
+  String? _photoError;
   final _picker = ImagePicker();
   late final _submissionIds = widget.submissionIds ?? ReportSubmissionIds();
 
@@ -155,6 +186,9 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
     _houseNoController.dispose();
     _landmarkController.dispose();
     _phoneController.dispose();
+    _alternateContactController.dispose();
+    _reporterNameController.dispose();
+    _reporterEmailController.dispose();
     _regionController.dispose();
     _provinceController.dispose();
     _cityController.dispose();
@@ -212,12 +246,29 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
   List<String> get _particularOptions =>
       _options.where((o) => o.hazardType == _selectedHazardType).map((o) => o.particular).toSet().toList();
 
+  /// Every color the hazard catalogue uses, in legend order.
+  List<String> get _catalogueColors {
+    final present = _options.map((o) => o.particularColor).toSet();
+    return _colorPriority.where(present.contains).toList();
+  }
+
+  /// The colors the catalogue has for the chosen hazard type and particular
+  /// (the website's Color options); every catalogue color until both are
+  /// chosen. Color is asked first, but hazard types and particulars are never
+  /// narrowed by it.
   List<String> get _colorOptions {
+    if (_selectedHazardType == null || _selectedParticular == null) return _catalogueColors;
     final present = _options
         .where((o) => o.hazardType == _selectedHazardType && o.particular == _selectedParticular)
         .map((o) => o.particularColor)
         .toSet();
     return _colorPriority.where(present.contains).toList();
+  }
+
+  /// Clears a chosen color the catalogue doesn't have for the new hazard
+  /// type/particular, so an impossible combination can't be submitted.
+  void _dropUnavailableColor() {
+    if (_selectedColor != null && !_colorOptions.contains(_selectedColor)) _selectedColor = null;
   }
 
   List<String> get _detailOptions => _options
@@ -335,19 +386,28 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
     }
   }
 
-  Future<void> _pickImage() async {
-    final image = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 80);
-    if (image != null && mounted) {
-      setState(() => _pickedImage = image);
-    }
+  Future<void> _pickImage() => _pickFrom(ImageSource.camera);
+
+  Future<void> _pickImageFromGallery() => _pickFrom(ImageSource.gallery);
+
+  Future<void> _pickFrom(ImageSource source) async {
+    final image = await _picker.pickImage(source: source, maxWidth: 1600, imageQuality: 80);
+    if (image == null || !mounted) return;
+    // Same limit as the website and the server: refuse it here with a
+    // clear message instead of a rejected submit.
+    final error = emergencyPhotoSizeError(await image.length());
+    if (!mounted) return;
+    setState(() {
+      _photoError = error;
+      if (error == null) _pickedImage = image;
+    });
   }
 
-  Future<void> _pickImageFromGallery() async {
-    final image = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 80);
-    if (image != null && mounted) {
-      setState(() => _pickedImage = image);
-    }
-  }
+  String get _alternateContact => _alternateContactController.text.trim();
+  String get _reporterEmail => _reporterEmailController.text.trim();
+
+  bool get _alternateContactInvalid => _alternateContact.isNotEmpty && !isValidContactNumber(_alternateContact);
+  bool get _reporterEmailInvalid => _reporterEmail.isNotEmpty && !_isValidEmail(_reporterEmail);
 
   bool get _canSubmit =>
       !_submitting &&
@@ -355,7 +415,8 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
       _selectedBarangay != null &&
       _purokController.text.trim().isNotEmpty &&
       _houseNoController.text.trim().isNotEmpty &&
-      (!widget.isGuest || RegExp(r'^\d{11}$').hasMatch(_phoneController.text.trim()));
+      (!widget.isGuest ||
+          (isValidContactNumber(_phoneController.text.trim()) && !_alternateContactInvalid && !_reporterEmailInvalid));
 
   Future<void> _submit() async {
     final option = _selectedOption;
@@ -368,6 +429,12 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
 
     final landmark = _landmarkController.text.trim();
     final phone = widget.isGuest ? _phoneController.text.trim() : null;
+    // Signed-in reporters' contact details come from their account (the
+    // website hides Personal Information for them too).
+    String? guestOnly(String value) => widget.isGuest && value.isNotEmpty ? value : null;
+    final alternateContact = guestOnly(_alternateContact);
+    final reporterName = guestOnly(_reporterNameController.text.trim());
+    final reporterEmail = guestOnly(_reporterEmail);
     // This attempt's contents by field label. They don't pick the
     // client_report_id (the draft has its own); they only show which fields
     // changed after an attempt that may already have been stored.
@@ -385,6 +452,9 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
       'Current situation': _selectedSituations.toList()..sort(),
       'Photo': _pickedImage?.path,
       'Contact number': phone,
+      'Alternate contact': alternateContact,
+      'Name': reporterName,
+      'Email': reporterEmail,
     };
 
     try {
@@ -414,6 +484,9 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
           imagePath: _pickedImage?.path,
           clientReportId: clientReportId,
           phone: phone,
+          alternateContact: alternateContact,
+          reporterName: reporterName,
+          reporterEmail: reporterEmail,
         ),
         isStored: widget.service.submittedReportExists,
         // A guest's original is found by its client_report_id (the same
@@ -510,6 +583,7 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
       _latitude = null;
       _longitude = null;
       _pickedImage = null;
+      _photoError = null;
     });
   }
 
@@ -536,256 +610,381 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
               // Extra bottom space so the preparedness button never covers
               // the submit button at the end of the form.
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-              child: _FormSection(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_rapidAssessment != null) ...[
-                      OutlinedButton.icon(
-                        onPressed: _applyRapidAssessment,
-                        icon: const Icon(Icons.bolt_rounded),
-                        label: const Text('Apply latest admin rapid assessment'),
-                        style: OutlinedButton.styleFrom(foregroundColor: RapidAlertColors.operationsBlue),
-                      ),
-                      const SizedBox(height: 14),
-                    ],
-                    _sectionLabel('Hazard type'),
-                    DropdownButtonFormField<String>(
-                      initialValue: _selectedHazardType,
-                      decoration: _fieldDecoration(),
-                      hint: const Text('Select hazard type'),
-                      items: _hazardTypes.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedHazardType = value;
-                          _selectedParticular = null;
-                          _selectedColor = null;
-                          _selectedDetail = null;
-                        });
-                      },
+              // The website's report form (report.blade.php), one card per
+              // section, in its order and wording.
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _FormSection(
+                    key: const Key('report-section-assessment'),
+                    title: 'Rapid Assessment',
+                    subtitle:
+                        'Select incident context and severity color for rapid field triage. '
+                        'Hazard choices are managed by admin and limited to approved options.',
+                    children: _assessmentFields(),
+                  ),
+                  _FormSection(
+                    key: const Key('report-section-location'),
+                    title: 'Location Information',
+                    subtitle: 'Pinpoint your area so teams can navigate to your exact location faster.',
+                    children: _locationFields(),
+                  ),
+                  if (widget.isGuest)
+                    _FormSection(
+                      key: const Key('report-section-personal'),
+                      title: 'Personal Information',
+                      subtitle: 'Provide reachable contact details for follow-up and validation.',
+                      children: _personalFields(),
                     ),
-                    if (_selectedHazardType != null) ...[
-                      const SizedBox(height: 14),
-                      _sectionLabel('Category'),
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedParticular,
-                        decoration: _fieldDecoration(),
-                        isExpanded: true,
-                        hint: const Text('What is happening?'),
-                        items: _particularOptions.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
-                        onChanged: (value) => setState(() {
-                          _selectedParticular = value;
-                          _selectedColor = null;
-                          _selectedDetail = null;
-                        }),
-                      ),
+                  _FormSection(
+                    key: const Key('report-section-needs'),
+                    title: 'Immediate Needs',
+                    subtitle: 'Add immediate needs and vulnerable household counts for better prioritization.',
+                    children: _needsFields(),
+                  ),
+                  _FormSection(
+                    key: const Key('report-section-priority'),
+                    title: 'Priority Persons',
+                    subtitle: 'Enter count per type (use 0 if none).',
+                    children: [
+                      _counterRow('Pregnant', _pregnantCount, (v) => setState(() => _pregnantCount = v)),
+                      _counterRow('Elderly', _elderlyCount, (v) => setState(() => _elderlyCount = v)),
+                      _counterRow('Child', _childCount, (v) => setState(() => _childCount = v)),
+                      _counterRow('PWD', _pwdCount, (v) => setState(() => _pwdCount = v)),
                     ],
-                    if (_selectedParticular != null) ...[
-                      const SizedBox(height: 14),
-                      _sectionLabel('Severity'),
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedColor,
-                        decoration: _fieldDecoration(),
-                        hint: const Text('Select severity'),
-                        items: _colorOptions
-                            .map(
-                              (c) => DropdownMenuItem(
-                                value: c,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [_severityDot(c), const SizedBox(width: 8), Text(_severityLabel(c))],
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) => setState(() {
-                          _selectedColor = value;
-                          _selectedDetail = null;
-                        }),
-                      ),
-                    ],
-                    if (_selectedColor != null) ...[
-                      const SizedBox(height: 14),
-                      _sectionLabel('Details'),
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedDetail,
-                        decoration: _fieldDecoration(),
-                        isExpanded: true,
-                        hint: const Text('Select the closest description'),
-                        items: _detailOptions
-                            .map(
-                              (d) => DropdownMenuItem(
-                                value: d,
-                                child: Text(d, overflow: TextOverflow.ellipsis),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) => setState(() => _selectedDetail = value),
-                      ),
-                      const SizedBox(height: 10),
-                    ],
-                    if (_selectedOption != null) ...[
-                      _sectionLabel('Current Situation'),
-                      ..._currentSituationOptions.map(
-                        (key) => CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          value: _selectedSituations.contains(key),
-                          onChanged: (checked) => setState(() {
-                            if (checked == true) {
-                              _selectedSituations.add(key);
-                            } else {
-                              _selectedSituations.remove(key);
-                            }
-                          }),
-                          title: Text(_situationConfig.labels[key] ?? key),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                    ],
-                    if (widget.isGuest) ...[
-                      _sectionLabel('Your contact number'),
-                      TextField(
-                        controller: _phoneController,
-                        keyboardType: TextInputType.phone,
-                        onChanged: (_) => setState(() {}),
-                        decoration: _fieldDecoration(hint: '09XXXXXXXXX (11 digits, required)'),
-                      ),
-                      const SizedBox(height: 14),
-                    ],
-                    _sectionLabel('Location'),
-                    Row(
-                      children: [
-                        Expanded(child: _textField('House / block no.', _houseNoController)),
-                        const SizedBox(width: 12),
-                        Expanded(child: _textField('Purok', _purokController)),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    _loadingBarangays
-                        ? const LinearProgressIndicator(minHeight: 2)
-                        : _barangayLoadError != null
-                        ? Row(
-                            children: [
-                              Expanded(
-                                child: Text(_barangayLoadError!, style: const TextStyle(color: Color(0xFFB91C1C))),
-                              ),
-                              TextButton(onPressed: _loadBarangays, child: const Text('Retry')),
-                            ],
-                          )
-                        : DropdownButtonFormField<String>(
-                            initialValue: _selectedBarangay,
-                            decoration: _fieldDecoration(hint: 'Barangay'),
-                            isExpanded: true,
-                            hint: const Text('Select barangay'),
-                            items: _barangayOptions.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
-                            onChanged: (value) => setState(() => _selectedBarangay = value),
-                          ),
-                    const SizedBox(height: 10),
-                    _textField('Landmark (optional)', _landmarkController),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: _capturingLocation ? null : _captureLocation,
-                      icon: _capturingLocation
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.my_location_rounded),
-                      label: Text(
-                        _latitude != null
-                            ? 'GPS captured (${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)})'
-                            : 'Capture current GPS location',
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    _sectionLabel('Photo (optional)'),
-                    if (_pickedImage != null) ...[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: Image.file(File(_pickedImage!.path), height: 160, fit: BoxFit.cover),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _pickImage,
-                            icon: const Icon(Icons.camera_alt_outlined),
-                            label: const Text('Camera'),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _pickImageFromGallery,
-                            icon: const Icon(Icons.photo_library_outlined),
-                            label: const Text('Gallery'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    _sectionLabel('Vulnerable population at this location'),
-                    _counterRow('Pregnant', _pregnantCount, (v) => setState(() => _pregnantCount = v)),
-                    _counterRow('Elderly', _elderlyCount, (v) => setState(() => _elderlyCount = v)),
-                    _counterRow('Children', _childCount, (v) => setState(() => _childCount = v)),
-                    _counterRow('PWD', _pwdCount, (v) => setState(() => _pwdCount = v)),
-                    const SizedBox(height: 12),
-                    _sectionLabel('Immediate Needs'),
-                    ..._immediateNeedsOptions.map(
-                      (option) => CheckboxListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        value: _selectedNeeds.contains(option.$1),
-                        onChanged: (checked) => setState(() {
-                          if (checked == true) {
-                            _selectedNeeds.add(option.$1);
-                          } else {
-                            _selectedNeeds.remove(option.$1);
-                          }
-                        }),
-                        title: Text(option.$2),
-                      ),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _needHelp,
-                      onChanged: (v) => setState(() => _needHelp = v),
-                      title: const Text('I need immediate help'),
-                    ),
-                    const SizedBox(height: 20),
-                    // Right above the button, where the user's eyes are when
-                    // they tap it — the top of this long form is off-screen.
-                    if (_submitStatus case final status?) ...[
-                      _SubmitStatusBanner(kind: status.kind, text: status.text),
-                      const SizedBox(height: 12),
-                    ],
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        onPressed: _canSubmit ? _submit : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: RapidAlertColors.primaryRed,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
-                        ),
-                        child: _submitting
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                              )
-                            : const Text('Submit Report', style: TextStyle(fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  _FormSection(
+                    key: const Key('report-section-photo'),
+                    title: 'Emergency Photo (Optional)',
+                    subtitle: 'Upload a photo to help responders assess the severity and plan appropriate response.',
+                    children: _photoFields(),
+                  ),
+                  _FormSection(
+                    key: const Key('report-section-consent'),
+                    title: 'Consent',
+                    children: [_consentNotice()],
+                  ),
+                  _FormSection(
+                    key: const Key('report-section-submit'),
+                    title: 'Submit Report',
+                    children: _submitFields(),
+                  ),
+                ],
               ),
             ),
     );
   }
+
+  List<Widget> _assessmentFields() => [
+    if (_rapidAssessment != null) ...[
+      OutlinedButton.icon(
+        onPressed: _applyRapidAssessment,
+        icon: const Icon(Icons.bolt_rounded),
+        label: const Text('Apply latest admin rapid assessment'),
+        style: OutlinedButton.styleFrom(foregroundColor: RapidAlertColors.operationsBlue),
+      ),
+      const SizedBox(height: 14),
+    ],
+    // Color first: the severity is the first thing a responder triages on.
+    _sectionLabel('Color'),
+    Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final color in _catalogueColors)
+          ChoiceChip(
+            key: Key('report-color-$color'),
+            avatar: _severityDot(color),
+            label: Text(severityLabels[color] ?? color.toUpperCase()),
+            selected: _selectedColor == color,
+            onSelected: _colorOptions.contains(color)
+                ? (selected) => setState(() {
+                    _selectedColor = selected ? color : null;
+                    _selectedDetail = null;
+                  })
+                : null,
+          ),
+      ],
+    ),
+    if (_selectedParticular != null && _selectedColor == null) ...[
+      const SizedBox(height: 6),
+      const Text(
+        'Choose a color available for this particular.',
+        style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+      ),
+    ],
+    const SizedBox(height: 14),
+    _sectionLabel('Hazard Type'),
+    DropdownButtonFormField<String>(
+      key: ValueKey('report-hazard-type-$_selectedHazardType'),
+      initialValue: _selectedHazardType,
+      decoration: _fieldDecoration(),
+      hint: const Text('Select hazard type...'),
+      items: _hazardTypes.map((h) => DropdownMenuItem(value: h, child: Text(h))).toList(),
+      onChanged: (value) => setState(() {
+        _selectedHazardType = value;
+        _selectedParticular = null;
+        _selectedDetail = null;
+      }),
+    ),
+    if (_selectedHazardType != null) ...[
+      const SizedBox(height: 14),
+      _sectionLabel('Particular'),
+      DropdownButtonFormField<String>(
+        key: ValueKey('report-particular-$_selectedHazardType-$_selectedParticular'),
+        initialValue: _selectedParticular,
+        decoration: _fieldDecoration(),
+        isExpanded: true,
+        hint: const Text('Select particular...'),
+        items: _particularOptions.map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
+        onChanged: (value) => setState(() {
+          _selectedParticular = value;
+          _selectedDetail = null;
+          _dropUnavailableColor();
+        }),
+      ),
+    ],
+    if (_selectedParticular != null && _selectedColor != null) ...[
+      const SizedBox(height: 14),
+      _sectionLabel('Detail'),
+      DropdownButtonFormField<String>(
+        key: ValueKey('report-detail-$_selectedHazardType-$_selectedParticular-$_selectedColor-$_selectedDetail'),
+        initialValue: _selectedDetail,
+        decoration: _fieldDecoration(),
+        isExpanded: true,
+        hint: const Text('Choose detail...'),
+        items: _detailOptions
+            .map((d) => DropdownMenuItem(value: d, child: Text(d, overflow: TextOverflow.ellipsis)))
+            .toList(),
+        onChanged: (value) => setState(() => _selectedDetail = value),
+      ),
+    ],
+    if (_selectedOption != null) ...[
+      const SizedBox(height: 14),
+      _sectionLabel('Current Situation'),
+      ..._currentSituationOptions.map(
+        (key) => CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: _selectedSituations.contains(key),
+          onChanged: (checked) => setState(() {
+            if (checked == true) {
+              _selectedSituations.add(key);
+            } else {
+              _selectedSituations.remove(key);
+            }
+          }),
+          title: Text(_situationConfig.labels[key] ?? key),
+        ),
+      ),
+      const Text(
+        'Select all that apply to how the hazard is affecting you right now.',
+        style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+      ),
+    ],
+  ];
+
+  List<Widget> _locationFields() => [
+    Text(
+      'City/Municipality: ${_cityController.text}, ${_provinceController.text}',
+      style: const TextStyle(fontWeight: FontWeight.w600),
+    ),
+    const SizedBox(height: 4),
+    const Text('Reports are currently accepted for Lipa City.', style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText)),
+    const SizedBox(height: 12),
+    _sectionLabel('Barangay'),
+    _loadingBarangays
+        ? const LinearProgressIndicator(minHeight: 2)
+        : _barangayLoadError != null
+        ? Row(
+            children: [
+              Expanded(child: Text(_barangayLoadError!, style: const TextStyle(color: Color(0xFFB91C1C)))),
+              TextButton(onPressed: _loadBarangays, child: const Text('Retry')),
+            ],
+          )
+        : DropdownButtonFormField<String>(
+            initialValue: _selectedBarangay,
+            decoration: _fieldDecoration(),
+            isExpanded: true,
+            hint: const Text('Select Barangay'),
+            items: _barangayOptions.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
+            onChanged: (value) => setState(() => _selectedBarangay = value),
+          ),
+    const SizedBox(height: 12),
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: _labelledField('Purok', _purokController, hint: 'Purok')),
+        const SizedBox(width: 12),
+        Expanded(child: _labelledField('House No.', _houseNoController, hint: 'House No.')),
+      ],
+    ),
+    _labelledField('Nearby Landmark', _landmarkController, hint: 'Nearby landmark (optional)'),
+    _sectionLabel('Detected Coordinates (Optional)'),
+    OutlinedButton.icon(
+      onPressed: _capturingLocation ? null : _captureLocation,
+      icon: _capturingLocation
+          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+          : const Icon(Icons.my_location_rounded),
+      label: Text(
+        _latitude != null
+            ? 'GPS captured (${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)})'
+            : 'Pinpoint My Location',
+      ),
+    ),
+  ];
+
+  List<Widget> _personalFields() => [
+    _labelledField(
+      'Primary Contact Number *',
+      _phoneController,
+      key: const Key('report-phone'),
+      hint: '09XXXXXXXXX',
+      phone: true,
+    ),
+    _labelledField(
+      'Alternate Contact (Optional)',
+      _alternateContactController,
+      key: const Key('report-alternate-contact'),
+      hint: '09XXXXXXXXX',
+      phone: true,
+      error: _alternateContactInvalid ? 'Enter 11 digits (09XXXXXXXXX), or leave it blank.' : null,
+    ),
+    _labelledField(
+      'Your Name (Optional)',
+      _reporterNameController,
+      key: const Key('report-name'),
+      hint: 'Full name (optional for anonymous reporting)',
+      maxLength: 150,
+    ),
+    _labelledField(
+      'Email Address (Optional)',
+      _reporterEmailController,
+      key: const Key('report-email'),
+      hint: 'your.email@example.com',
+      keyboardType: TextInputType.emailAddress,
+      maxLength: 150,
+      error: _reporterEmailInvalid ? 'Enter a valid email address, or leave it blank.' : null,
+    ),
+  ];
+
+  List<Widget> _needsFields() => [
+    ..._immediateNeedsOptions.map(
+      (option) => CheckboxListTile(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        controlAffinity: ListTileControlAffinity.leading,
+        value: _selectedNeeds.contains(option.$1),
+        onChanged: (checked) => setState(() {
+          if (checked == true) {
+            _selectedNeeds.add(option.$1);
+          } else {
+            _selectedNeeds.remove(option.$1);
+          }
+        }),
+        title: Text(option.$2),
+      ),
+    ),
+    const Divider(height: 20),
+    CheckboxListTile(
+      key: const Key('report-need-help'),
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      value: _needHelp,
+      onChanged: (v) => setState(() => _needHelp = v ?? false),
+      title: const Text('Need Help (Urgent follow-up requested)', style: TextStyle(fontWeight: FontWeight.w700)),
+      subtitle: const Text('Use this only for urgent situations requiring quick follow-up.'),
+    ),
+  ];
+
+  List<Widget> _photoFields() => [
+    if (_pickedImage != null) ...[
+      ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.file(File(_pickedImage!.path), height: 160, fit: BoxFit.cover),
+      ),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton.icon(
+          onPressed: () => setState(() => _pickedImage = null),
+          icon: const Icon(Icons.close_rounded, size: 18),
+          label: const Text('Remove photo'),
+        ),
+      ),
+    ],
+    Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _pickImage,
+            icon: const Icon(Icons.camera_alt_outlined),
+            label: const Text('Camera'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _pickImageFromGallery,
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text('Gallery'),
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 6),
+    const Text('JPG, PNG, GIF or WEBP (Max 5MB)', style: TextStyle(fontSize: 12, color: RapidAlertColors.lightText)),
+    if (_photoError != null) ...[
+      const SizedBox(height: 6),
+      Text(_photoError!, key: const Key('report-photo-error'), style: const TextStyle(color: Color(0xFFB91C1C))),
+    ],
+  ];
+
+  Widget _consentNotice() => Container(
+    key: const Key('report-consent-notice'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFFBEB),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: const Color(0xFFFDE68A)),
+    ),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline_rounded, size: 20, color: Color(0xFFB45309)),
+        SizedBox(width: 8),
+        Expanded(child: Text(reportConsentNotice, style: TextStyle(fontSize: 13))),
+      ],
+    ),
+  );
+
+  List<Widget> _submitFields() => [
+    // Right above the button, where the user's eyes are when they tap it —
+    // the top of this long form is off-screen.
+    if (_submitStatus case final status?) ...[
+      _SubmitStatusBanner(kind: status.kind, text: status.text),
+      const SizedBox(height: 12),
+    ],
+    SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: ElevatedButton(
+        onPressed: _canSubmit ? _submit : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: RapidAlertColors.primaryRed,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+        ),
+        child: _submitting
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+              )
+            : const Text('Submit Report', style: TextStyle(fontWeight: FontWeight.w700)),
+      ),
+    ),
+  ];
 
   T? _firstOrNull<T>(Iterable<T> items) {
     for (final item in items) {
@@ -808,13 +1007,34 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
     return CircleAvatar(radius: 6, backgroundColor: c);
   }
 
-  String _severityLabel(String color) => color.isEmpty ? color : color[0].toUpperCase() + color.substring(1);
-
-  Widget _textField(String label, TextEditingController controller) {
-    return TextField(
-      controller: controller,
-      onChanged: (_) => setState(() {}),
-      decoration: _fieldDecoration(hint: label),
+  Widget _labelledField(
+    String label,
+    TextEditingController controller, {
+    Key? key,
+    String? hint,
+    bool phone = false,
+    TextInputType? keyboardType,
+    int? maxLength,
+    String? error,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionLabel(label),
+          TextField(
+            key: key,
+            controller: controller,
+            keyboardType: phone ? TextInputType.number : keyboardType,
+            inputFormatters: phone
+                ? _contactNumberFormatters
+                : [if (maxLength != null) LengthLimitingTextInputFormatter(maxLength)],
+            onChanged: (_) => setState(() {}),
+            decoration: _fieldDecoration(hint: hint).copyWith(errorText: error),
+          ),
+        ],
+      ),
     );
   }
 
@@ -843,10 +1063,15 @@ class _ReportSubmitScreenState extends State<ReportSubmitScreen> {
           Expanded(child: Text(label)),
           IconButton(
             icon: const Icon(Icons.remove_circle_outline),
+            tooltip: 'Fewer $label',
             onPressed: value > 0 ? () => onChanged(value - 1) : null,
           ),
           Text(value.toString(), style: const TextStyle(fontWeight: FontWeight.w700)),
-          IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: () => onChanged(value + 1)),
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline),
+            tooltip: 'More $label',
+            onPressed: () => onChanged(value + 1),
+          ),
         ],
       ),
     );
@@ -893,33 +1118,56 @@ class _SubmitStatusBanner extends StatelessWidget {
   }
 }
 
-/// The website's report form card (public/css/report.css .form-section):
-/// white, hairline border, 3px red top edge, radius 18.
+/// One section of the website's report form (public/css/report.css
+/// .form-section): white, hairline border, 3px red top edge, radius 18, with
+/// the section title and its one-line description.
 class _FormSection extends StatelessWidget {
-  const _FormSection({required this.child});
+  const _FormSection({super.key, required this.title, this.subtitle, required this.children});
 
-  final Widget child;
+  final String title;
+  final String? subtitle;
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.white, Color(0xFFFAFDFF)],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.white, Color(0xFFFAFDFF)],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFD4DFEB)),
         ),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFD4DFEB)),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const ColoredBox(color: Color(0xFFD91F32), child: SizedBox(height: 3)),
-            Padding(padding: const EdgeInsets.all(14), child: child),
-          ],
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const ColoredBox(color: Color(0xFFD91F32), child: SizedBox(height: 3)),
+              Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: RapidAlertColors.darkText),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(subtitle!, style: const TextStyle(fontSize: 12.5, color: RapidAlertColors.lightText)),
+                    ],
+                    const Divider(height: 22),
+                    ...children,
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

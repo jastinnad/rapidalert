@@ -15,12 +15,18 @@ class ReportChatScreen extends StatefulWidget {
     required this.reportId,
     required this.receiverId,
     required this.receiverName,
+    this.trackingId,
   });
 
   final ReporterService service;
+
+  /// The report's internal ID, which binds the conversation (API only).
   final int reportId;
   final int receiverId;
   final String receiverName;
+
+  /// Shown in the header so the person knows which report this is about.
+  final String? trackingId;
 
   @override
   State<ReportChatScreen> createState() => _ReportChatScreenState();
@@ -110,7 +116,20 @@ class _ReportChatScreenState extends State<ReportChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.receiverName)),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.receiverName),
+            if (widget.trackingId != null && widget.trackingId!.isNotEmpty)
+              Text(
+                'Report ${widget.trackingId}',
+                key: const Key('chat-tracking-id'),
+                style: const TextStyle(fontSize: 12, color: RapidAlertColors.lightText),
+              ),
+          ],
+        ),
+      ),
       body: Column(
         children: [
           Expanded(

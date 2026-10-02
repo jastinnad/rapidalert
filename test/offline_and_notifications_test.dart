@@ -72,6 +72,9 @@ void main() {
               {
                 'area_id': 1,
                 'name': 'Tibig Covered Court',
+                // The ranked API always sends the center's position.
+                'lat': 13.95,
+                'lon': 121.15,
                 'capacity': 300,
                 'available_slots': 300,
                 'distance_km': 1.4,

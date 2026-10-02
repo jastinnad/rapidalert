@@ -92,6 +92,9 @@ class ApiReporterService implements ReporterService {
     String? imagePath,
     String? clientReportId,
     String? phone,
+    String? alternateContact,
+    String? reporterName,
+    String? reporterEmail,
   }) async {
     final endpoint = Uri.parse('$_baseUrl/api/reporter/reports');
     final request = http.MultipartRequest('POST', endpoint)
@@ -134,6 +137,16 @@ class ApiReporterService implements ReporterService {
     }
     if (phone != null && phone.isNotEmpty) {
       request.fields['phone'] = phone;
+    }
+    // The website's optional guest contact fields, under its field names.
+    if (alternateContact != null && alternateContact.isNotEmpty) {
+      request.fields['alternate_contact'] = alternateContact;
+    }
+    if (reporterName != null && reporterName.isNotEmpty) {
+      request.fields['reporter_name'] = reporterName;
+    }
+    if (reporterEmail != null && reporterEmail.isNotEmpty) {
+      request.fields['reporter_email'] = reporterEmail;
     }
 
     // `MultipartRequest.fields` is a Map, so it can't hold repeated
@@ -248,6 +261,20 @@ class ApiReporterService implements ReporterService {
     return (json['notifications'] as List<dynamic>? ?? const [])
         .map((item) => ReportNotification.fromApi(item as Map<String, dynamic>))
         .toList();
+  }
+
+  @override
+  Future<ResponderPresence?> loadResponderPresence(int reportId) async {
+    final uri = Uri.parse(
+      '$_baseUrl/api/reports/responder-presence',
+    ).replace(queryParameters: {'report_id': reportId.toString()});
+    final response = await http.get(uri, headers: _headers).timeout(_readTimeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Failed to load responder presence: ${response.statusCode}');
+    }
+
+    return ResponderPresence.fromApi(jsonDecode(response.body) as Map<String, dynamic>);
   }
 
   @override
